@@ -72,7 +72,12 @@ def send_email(subject: str, body: str):
 
 
 def load_roster() -> pd.DataFrame:
-    df = pd.read_csv(ROSTER_PATH)
+    # Fantrax exports sometimes have commas inside quoted fields or inconsistent columns.
+    # Use python engine for more tolerant parsing, and fall back to skipping bad lines.
+    try:
+        df = pd.read_csv(ROSTER_PATH, engine="python")
+    except Exception:
+        df = pd.read_csv(ROSTER_PATH, engine="python", on_bad_lines="skip")
 
     # Try common columns; fallback to first column
     name_col = None
@@ -85,6 +90,11 @@ def load_roster() -> pd.DataFrame:
 
     out = df.copy()
     out["player_name"] = out[name_col].astype(str).str.strip()
+    out = out[out["player_name"].ne("")]
+
+    # Drop obvious header repeats / garbage rows
+    out = out[~out["player_name"].str.lower().isin(["player", "player name", "name"])]
+
     return out[["player_name"]].drop_duplicates()
 
 
@@ -198,7 +208,7 @@ def run_daily_news():
     state["last_run_utc"] = now_utc().isoformat()
     save_state(state)
 
-    print(f"[daily] since={since.isoformat()} found_items={len(found)}")
+    print(f"[daily] since={since.isoformat()} found_items={len(found)} roster={len(roster)}")
 
     # QUIET MODE: no email if no news
     if not found:
@@ -334,4 +344,5 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
     main()
