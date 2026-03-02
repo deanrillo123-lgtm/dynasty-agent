@@ -1,7 +1,5 @@
 name: Dynasty Agent
-concurrency:
-  group: dynasty-agent-main
-  cancel-in-progress: true
+
 on:
   schedule:
     # Daily news check (quiet if no news)
@@ -18,6 +16,11 @@ on:
         description: "daily | weekly | smtp_test | news_test | weekly_test"
         required: true
         default: "smtp_test"
+
+# Prevent overlapping runs that both try to commit/push state
+concurrency:
+  group: dynasty-agent-main
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -77,10 +80,19 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           mkdir -p state
           touch state/state.json state/weekly_news.jsonl
+
           git add state/state.json state/weekly_news.jsonl || true
-          git diff --cached --quiet && echo "No state changes to commit" || (
-            git commit -m "Update agent state" &&
-            git push origin HEAD:main
-          )
+          git diff --cached --quiet && echo "No state changes to commit" && exit 0
+
+          # Commit locally
+          git commit -m "Update agent state"
+
+          # Rebase onto latest main (fixes 'fetch first' rejects)
+          git fetch origin main
+          git rebase origin/main
+
+          # Push
+          git push origin HEAD:main
