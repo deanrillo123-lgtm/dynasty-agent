@@ -1,0 +1,84 @@
+name: Dynasty Agent
+
+on:
+  schedule:
+    # Daily news check (quiet if no news)
+    - cron: "0 14 * * *"
+
+    # Monday runs around 7am Chicago.
+    # We run two UTC times to cover DST; script gates on Monday 7am CT.
+    - cron: "0 12 * * 1"
+    - cron: "0 13 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: "daily | weekly | smtp_test | news_test | weekly_test"
+        required: true
+        default: "smtp_test"
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run (manual)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          ROSTER_PATH: roster.csv
+          RUN_MODE: ${{ inputs.run_mode }}
+        run: python agent.py
+
+      - name: Run daily (scheduled)
+        if: github.event_name == 'schedule'
+        env:
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          ROSTER_PATH: roster.csv
+          RUN_MODE: daily
+        run: python agent.py
+
+      - name: Run weekly (scheduled)
+        if: github.event_name == 'schedule'
+        env:
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          ROSTER_PATH: roster.csv
+          RUN_MODE: weekly
+        run: python agent.py
+
+      - name: Commit state/news logs (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p state
+          touch state/state.json state/weekly_news.jsonl
+          git add state/state.json state/weekly_news.jsonl || true
+          git diff --cached --quiet && echo "No state changes to commit" || (
+            git commit -m "Update agent state" &&
+            git push origin HEAD:main
+          )
