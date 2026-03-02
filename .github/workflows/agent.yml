@@ -1,5 +1,7 @@
 name: Dynasty Agent
-
+concurrency:
+  group: dynasty-agent-main
+  cancel-in-progress: true
 on:
   schedule:
     # Daily news check (quiet if no news)
