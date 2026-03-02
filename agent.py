@@ -2,7 +2,7 @@ import os
 import json
 import smtplib
 from email.message import EmailMessage
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from dateutil import tz
 import pytz
 import pandas as pd
@@ -24,6 +24,10 @@ WEEKLY_NEWS_PATH = os.path.join(STATE_DIR, "weekly_news.jsonl")
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
+
+# We query MLB first, then MiLB umbrella, and fill missing players from MiLB results.
+SPORT_ID_MLB = 1
+SPORT_ID_MILB = 21
 
 
 def local_now():
@@ -72,8 +76,7 @@ def send_email(subject: str, body: str):
 
 
 def load_roster() -> pd.DataFrame:
-    # Fantrax exports sometimes have commas inside quoted fields or inconsistent columns.
-    # Use python engine for more tolerant parsing, and fall back to skipping bad lines.
+    # Fantrax exports can have inconsistent columns/quotes -> tolerate parsing.
     try:
         df = pd.read_csv(ROSTER_PATH, engine="python")
     except Exception:
@@ -91,10 +94,7 @@ def load_roster() -> pd.DataFrame:
     out = df.copy()
     out["player_name"] = out[name_col].astype(str).str.strip()
     out = out[out["player_name"].ne("")]
-
-    # Drop obvious header repeats / garbage rows
     out = out[~out["player_name"].str.lower().isin(["player", "player name", "name"])]
-
     return out[["player_name"]].drop_duplicates()
 
 
@@ -182,6 +182,241 @@ def reset_weekly_news():
         f.write("")
 
 
+def _safe_div(n, d):
+    try:
+        if d in (0, 0.0, None):
+            return None
+        return n / d
+    except Exception:
+        return None
+
+
+def _pct(n, d):
+    v = _safe_div(n, d)
+    if v is None:
+        return None
+    return round(v * 100.0, 1)
+
+
+def _level_from_split(split: dict, fallback: str = "") -> str:
+    # Best-effort "Level" label from MLB Stats API split metadata.
+    sport = split.get("sport") or {}
+    league = split.get("league") or {}
+    team = split.get("team") or {}
+
+    # Prefer sport abbreviation/name for MiLB levels (e.g., "AAA", "AA", etc.)
+    for key in ["abbreviation", "name"]:
+        if sport.get(key):
+            return str(sport.get(key))
+    for key in ["abbreviation", "name"]:
+        if league.get(key):
+            return str(league.get(key))
+    if team.get("name"):
+        return str(team.get("name"))
+    return fallback
+
+
+def fetch_stats_splits(
+    person_ids: list[int],
+    group: str,
+    stats_kind: str,
+    sport_id: int,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """
+    Calls MLB Stats API /stats endpoint via statsapi wrapper.
+    group: "hitting" or "pitching"
+    stats_kind: "season" or "byDateRange"
+    """
+    params = {
+        "group": group,
+        "stats": stats_kind,
+        "sportId": sport_id,
+        "personIds": ",".join(str(x) for x in person_ids),
+    }
+    if start_date and end_date:
+        params["startDate"] = start_date
+        params["endDate"] = end_date
+
+    try:
+        data = statsapi.get("stats", params)
+        # shape: {"stats":[{"splits":[...]}]}
+        stats_arr = data.get("stats", [])
+        if not stats_arr:
+            return []
+        splits = stats_arr[0].get("splits", [])
+        return splits if isinstance(splits, list) else []
+    except Exception:
+        return []
+
+
+def stats_tables_all_players(
+    roster_names: list[str],
+    name_to_id: dict[str, int],
+    year: int,
+    weekly_start: date,
+    weekly_end: date,
+):
+    """
+    Returns 4 dataframes:
+      hitters_week, hitters_season, pitchers_week, pitchers_season
+    Includes all roster players (rows exist even if stats missing).
+    """
+    ids = [name_to_id[n] for n in roster_names if n in name_to_id]
+
+    ws = weekly_start.strftime("%Y-%m-%d")
+    we = weekly_end.strftime("%Y-%m-%d")
+
+    def get_group_tables(group: str):
+        # Query MLB first
+        w_mlb = fetch_stats_splits(ids, group, "byDateRange", SPORT_ID_MLB, ws, we)
+        s_mlb = fetch_stats_splits(ids, group, "season", SPORT_ID_MLB)
+
+        # Query MiLB umbrella and fill missing players
+        w_milb = fetch_stats_splits(ids, group, "byDateRange", SPORT_ID_MILB, ws, we)
+        s_milb = fetch_stats_splits(ids, group, "season", SPORT_ID_MILB)
+
+        return (w_mlb, s_mlb, w_milb, s_milb)
+
+    def splits_to_df(splits: list[dict], group: str) -> pd.DataFrame:
+        rows = []
+        for sp in splits:
+            player = (sp.get("player") or {}).get("fullName") or (sp.get("player") or {}).get("name")
+            if not player:
+                continue
+            stat = sp.get("stat") or {}
+            lvl = _level_from_split(sp)
+
+            if group == "hitting":
+                pa = stat.get("plateAppearances")
+                so = stat.get("strikeOuts")
+                bb = stat.get("baseOnBalls")
+                rows.append(
+                    {
+                        "Name": player,
+                        "Level": lvl,
+                        "G": stat.get("gamesPlayed"),
+                        "H": stat.get("hits"),
+                        "HR": stat.get("homeRuns"),
+                        "RBI": stat.get("rbi"),
+                        "SB": stat.get("stolenBases"),
+                        "AVG": stat.get("avg"),
+                        "OBP": stat.get("obp"),
+                        "K%": _pct(so, pa) if pa is not None else None,
+                        "BB%": _pct(bb, pa) if pa is not None else None,
+                    }
+                )
+            else:
+                bf = stat.get("battersFaced")
+                so = stat.get("strikeOuts")
+                bb = stat.get("baseOnBalls")
+                rows.append(
+                    {
+                        "Name": player,
+                        "Level": lvl,
+                        "GS": stat.get("gamesStarted"),
+                        "IP": stat.get("inningsPitched"),
+                        "ERA": stat.get("era"),
+                        "K%": _pct(so, bf) if bf is not None else None,
+                        "BB%": _pct(bb, bf) if bf is not None else None,
+                    }
+                )
+
+        if not rows:
+            return pd.DataFrame(columns=["Name"])
+        df = pd.DataFrame(rows)
+
+        # If a player has multiple splits (multi-level), keep the row with the "best" level label
+        # and non-null stats (simple heuristic: max games / IP).
+        if group == "hitting" and "G" in df.columns:
+            df["G_num"] = pd.to_numeric(df["G"], errors="coerce").fillna(0)
+            df = df.sort_values(["Name", "G_num"], ascending=[True, False]).drop_duplicates("Name", keep="first")
+            df = df.drop(columns=["G_num"], errors="ignore")
+        if group == "pitching" and "IP" in df.columns:
+            # IP can be string like "12.1" -> numeric-ish
+            df["IP_num"] = pd.to_numeric(df["IP"], errors="coerce").fillna(0)
+            df = df.sort_values(["Name", "IP_num"], ascending=[True, False]).drop_duplicates("Name", keep="first")
+            df = df.drop(columns=["IP_num"], errors="ignore")
+
+        return df
+
+    # HIT
+    hw_mlb, hs_mlb, hw_milb, hs_milb = get_group_tables("hitting")
+    hitters_week_mlb = splits_to_df(hw_mlb, "hitting")
+    hitters_week_milb = splits_to_df(hw_milb, "hitting")
+    hitters_season_mlb = splits_to_df(hs_mlb, "hitting")
+    hitters_season_milb = splits_to_df(hs_milb, "hitting")
+
+    # PIT
+    pw_mlb, ps_mlb, pw_milb, ps_milb = get_group_tables("pitching")
+    pitchers_week_mlb = splits_to_df(pw_mlb, "pitching")
+    pitchers_week_milb = splits_to_df(pw_milb, "pitching")
+    pitchers_season_mlb = splits_to_df(ps_mlb, "pitching")
+    pitchers_season_milb = splits_to_df(ps_milb, "pitching")
+
+    def merge_fill(primary: pd.DataFrame, fallback: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+        # primary preferred; fill missing names from fallback
+        if primary is None or primary.empty:
+            base = fallback.copy()
+        else:
+            base = primary.copy()
+            if fallback is not None and not fallback.empty:
+                missing = set(fallback["Name"]) - set(base["Name"])
+                if missing:
+                    base = pd.concat([base, fallback[fallback["Name"].isin(missing)]], ignore_index=True)
+
+        # Ensure all roster names appear (even if blank stats)
+        all_rows = pd.DataFrame({"Name": roster_names})
+        base = all_rows.merge(base, on="Name", how="left")
+
+        # Ensure columns exist
+        for c in cols:
+            if c not in base.columns:
+                base[c] = None
+
+        return base
+
+    hitter_cols = ["Level", "G", "H", "HR", "RBI", "SB", "AVG", "OBP", "wRC+", "K%", "BB%"]
+    pitcher_cols = ["Level", "GS", "IP", "ERA", "FIP", "K%", "BB%"]
+
+    hitters_week = merge_fill(hitters_week_mlb, hitters_week_milb, hitter_cols)
+    hitters_season = merge_fill(hitters_season_mlb, hitters_season_milb, hitter_cols)
+    pitchers_week = merge_fill(pitchers_week_mlb, pitchers_week_milb, pitcher_cols)
+    pitchers_season = merge_fill(pitchers_season_mlb, pitchers_season_milb, pitcher_cols)
+
+    # Overlay FanGraphs advanced season stats (MLB) when available
+    try:
+        fg_bat = batting_stats(year)
+        fg_pit = pitching_stats(year)
+
+        fg_bat = fg_bat[["Name", "wRC+"]].copy() if "wRC+" in fg_bat.columns else fg_bat[["Name"]].copy()
+        fg_pit = fg_pit[["Name", "FIP"]].copy() if "FIP" in fg_pit.columns else fg_pit[["Name"]].copy()
+
+        hitters_season = hitters_season.merge(fg_bat, on="Name", how="left", suffixes=("", "_fg"))
+        if "wRC+_fg" in hitters_season.columns:
+            hitters_season["wRC+"] = hitters_season["wRC+_fg"].combine_first(hitters_season["wRC+"])
+            hitters_season = hitters_season.drop(columns=["wRC+_fg"])
+
+        pitchers_season = pitchers_season.merge(fg_pit, on="Name", how="left", suffixes=("", "_fg"))
+        if "FIP_fg" in pitchers_season.columns:
+            pitchers_season["FIP"] = pitchers_season["FIP_fg"].combine_first(pitchers_season["FIP"])
+            pitchers_season = pitchers_season.drop(columns=["FIP_fg"])
+
+        # Weekly wRC+/FIP typically not available as a clean table -> leave blank
+    except Exception as e:
+        # If FanGraphs pull fails, keep blanks
+        print(f"[stats] FanGraphs overlay failed: {e}")
+
+    # Nice ordering
+    hitters_week = hitters_week[["Name"] + hitter_cols].sort_values("Name")
+    hitters_season = hitters_season[["Name"] + hitter_cols].sort_values("Name")
+    pitchers_week = pitchers_week[["Name"] + pitcher_cols].sort_values("Name")
+    pitchers_season = pitchers_season[["Name"] + pitcher_cols].sort_values("Name")
+
+    return hitters_week, hitters_season, pitchers_week, pitchers_season
+
+
 def run_daily_news():
     state = load_state()
     roster = load_roster()
@@ -225,13 +460,21 @@ def run_daily_news():
     )
 
 
-def build_weekly_email_body() -> str:
+def build_weekly_email_body(force: bool = False) -> str:
     roster = load_roster()
     news = read_weekly_news()
 
+    # Weekly window: previous Mon..Sun (local)
+    now_local = local_now()
+    this_mon = (now_local - timedelta(days=now_local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (this_mon - timedelta(days=7)).date()
+    end = (this_mon - timedelta(days=1)).date()
+
     body = []
-    body.append(f"# Dynasty Weekly Report — {local_now().strftime('%b %d, %Y')}")
+    body.append(f"# Dynasty Weekly Report — {now_local.strftime('%b %d, %Y')}")
+    body.append(f"_Weekly window: {start.strftime('%b %d')}–{end.strftime('%b %d')}_")
     body.append("")
+
     body.append("## Weekly News Recap")
     if not news:
         body.append("No major news logged this week.")
@@ -246,41 +489,45 @@ def build_weekly_email_body() -> str:
             body.append(f"- **{it.get('player','')}** — {it.get('desc','')} ({ts})")
 
     body.append("")
-    body.append("## Season-to-date MLB Stats (FanGraphs tables)")
-    body.append("_Note: This section is MLB-only; MiLB advanced metrics are often not available._")
+    body.append("## Weekly Stats (All Players)")
+    body.append("_wRC+ / FIP will be blank for players not available in FanGraphs MLB tables._")
     body.append("")
 
-    year = local_now().year
-    names = set(roster["player_name"].tolist())
+    # Map names -> mlbam ids
+    state = load_state()
+    roster_names = roster["player_name"].tolist()
+    name_to_id = {}
+    for nm in roster_names:
+        pid = lookup_mlbam_id(nm, state)
+        if pid:
+            name_to_id[nm] = pid
+    save_state(state)
+
+    year = now_local.year
 
     try:
-        bat = batting_stats(year)
-        pit = pitching_stats(year)
+        hitters_week, hitters_season, pitchers_week, pitchers_season = stats_tables_all_players(
+            roster_names=roster_names,
+            name_to_id=name_to_id,
+            year=year,
+            weekly_start=start,
+            weekly_end=end,
+        )
 
-        bat = bat[bat["Name"].isin(names)].copy()
-        pit = pit[pit["Name"].isin(names)].copy()
-
-        if not bat.empty:
-            cols = ["Name", "Team", "G", "H", "HR", "RBI", "SB", "AVG", "OBP", "wRC+", "K%", "BB%"]
-            show = bat[[c for c in cols if c in bat.columns]].sort_values("Name")
-            body.append("### Hitters (Season)")
-            body.append(show.to_markdown(index=False))
-            body.append("")
-        else:
-            body.append("### Hitters (Season)")
-            body.append("No MLB hitter matches found.")
-            body.append("")
-
-        if not pit.empty:
-            cols = ["Name", "Team", "GS", "IP", "ERA", "FIP", "K%", "BB%"]
-            show = pit[[c for c in cols if c in pit.columns]].sort_values("Name")
-            body.append("### Pitchers (Season)")
-            body.append(show.to_markdown(index=False))
-            body.append("")
-        else:
-            body.append("### Pitchers (Season)")
-            body.append("No MLB pitcher matches found.")
-            body.append("")
+        body.append("### Hitters (Weekly)")
+        body.append(hitters_week.to_markdown(index=False))
+        body.append("")
+        body.append("### Pitchers (Weekly)")
+        body.append(pitchers_week.to_markdown(index=False))
+        body.append("")
+        body.append("## Season-to-date Stats (All Players)")
+        body.append("")
+        body.append("### Hitters (Season)")
+        body.append(hitters_season.to_markdown(index=False))
+        body.append("")
+        body.append("### Pitchers (Season)")
+        body.append(pitchers_season.to_markdown(index=False))
+        body.append("")
     except Exception as e:
         body.append(f"Stats error: {e}")
 
@@ -313,7 +560,7 @@ def run_news_test():
 
 
 def run_weekly_test():
-    body = build_weekly_email_body()
+    body = build_weekly_email_body(force=True)
     send_email(subject="Dynasty Weekly Report — TEST", body=body)
 
 
@@ -344,5 +591,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
     main()
