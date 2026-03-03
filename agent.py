@@ -646,16 +646,16 @@ def mark_daily_sent(state):
 
 
 def build_daily_bodies(official_items, reports, team_by_player, title_str):
-    # group reports by player
     reports_sorted = sorted(reports, key=lambda x: (x["player"], x["source"], x["title"]))
+    official_sorted = sorted(official_items, key=lambda x: x.get("utc", ""))
 
     # plain text
     text = []
     text.append(f"Dynasty Daily Update — {title_str}")
     text.append("")
     text.append("Transaction Wire (Official)")
-    if official_items:
-        for it in official_items:
+    if official_sorted:
+        for it in official_sorted:
             nm = it["player"]
             tm = team_by_player.get(nm, "")
             hdr = f"{nm} ({tm})" if tm else nm
@@ -678,48 +678,57 @@ def build_daily_bodies(official_items, reports, team_by_player, title_str):
         text.append("No matched reports.")
     text_body = "\n".join(text)
 
-    # html
+    # html (flatter layout, like weekly)
     html = []
     html.append("<html><body style='font-family:Arial, Helvetica, sans-serif; line-height:1.35; color:#111;'>")
     html.append(f"<h2 style='margin:0 0 10px 0;'>Dynasty Daily Update — {h(title_str)}</h2>")
 
+    # Official section
     html.append("<h3 style='margin:18px 0 8px 0;'>Transaction Wire (Official)</h3>")
-    if official_items:
-        for it in official_items:
-            nm = it["player"]
-            tm = team_by_player.get(nm, "")
-            hdr = f"{nm} ({tm})" if tm else nm
+    if official_sorted:
+        # group by player for a cleaner look
+        by_player = {}
+        for it in official_sorted:
+            by_player.setdefault(it["player"], []).append(it)
+
+        for player in sorted(by_player.keys()):
+            tm = team_by_player.get(player, "")
+            hdr = f"{player} ({tm})" if tm else player
             html.append(
-                "<div style='margin:10px 0; padding:10px 12px; border:1px solid #e8e8e8; border-radius:10px;'>"
-                f"<div style='font-size:15px;'><b>{h(hdr)}</b></div>"
-                f"<div style='margin-top:6px; color:#222;'>{h(it['desc'])}</div>"
-                "</div>"
+                "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
+                f"<div style='font-size:16px; margin-bottom:8px;'><b>{h(hdr)}</b></div>"
+                "<ul style='margin:0; padding-left:18px;'>"
             )
+            for it in by_player[player]:
+                html.append(f"<li style='margin:6px 0;'>{h(it['desc'])}</li>")
+            html.append("</ul></div>")
     else:
         html.append("<div style='color:#666;'>No official transactions.</div>")
 
+    # Reports section
     html.append("<h3 style='margin:22px 0 8px 0;'>Reports / Quotes</h3>")
     if reports_sorted:
-        cur = None
+        by_player = {}
         for r in reports_sorted:
-            if r["player"] != cur:
-                cur = r["player"]
-                tm = team_by_player.get(cur, "")
-                hdr = f"{cur} ({tm})" if tm else cur
-                html.append(
-                    "<div style='margin:14px 0 0 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
-                    f"<div style='font-size:16px; margin-bottom:8px;'><b>{h(hdr)}</b></div>"
-                )
+            by_player.setdefault(r["player"], []).append(r)
+
+        for player in sorted(by_player.keys()):
+            tm = team_by_player.get(player, "")
+            hdr = f"{player} ({tm})" if tm else player
             html.append(
-                "<div style='margin:10px 0 0 0; padding-top:10px; border-top:1px solid #f0f0f0;'>"
-                f"<div style='margin:0 0 5px 0;'>{h(r['title'])}</div>"
-                f"<div style='display:flex; gap:10px; align-items:center; flex-wrap:wrap;'>"
-                f"<span style='color:#555; font-size:13px;'>Source: {h(r['source'])}</span>"
-                f"{news_button(r['link'])}"
-                "</div>"
-                "</div>"
+                "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
+                f"<div style='font-size:16px; margin-bottom:8px;'><b>{h(hdr)}</b></div>"
             )
-        html.append("</div>")  # close last player card
+            for r in by_player[player]:
+                html.append(
+                    "<div style='margin:10px 0 0 0; padding-top:10px; border-top:1px solid #f0f0f0;'>"
+                    f"<div style='margin:0 0 6px 0;'>{h(r['title'])}</div>"
+                    "<div style='display:flex; gap:10px; align-items:center; flex-wrap:wrap;'>"
+                    f"<span style='color:#555; font-size:13px;'>Source: {h(r['source'])}</span>"
+                    f"{news_button(r['link'])}"
+                    "</div></div>"
+                )
+            html.append("</div>")
     else:
         html.append("<div style='color:#666;'>No matched reports.</div>")
 
@@ -730,7 +739,6 @@ def build_daily_bodies(official_items, reports, team_by_player, title_str):
     html_body = "".join(html)
 
     return text_body, html_body
-
 
 def run_daily(lookback_hours=None):
     state = load_state()
