@@ -3,3 +3,4 @@ python-dateutil==2.9.0.post0
 pytz==2024.1
 MLB-StatsAPI==1.9.0
 pybaseball==2.2.7
+feedparser==6.0.11
