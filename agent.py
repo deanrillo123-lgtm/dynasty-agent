@@ -25,9 +25,8 @@ ROSTER_PATH = os.getenv("ROSTER_PATH", "roster.csv")
 STATE_DIR = "state"
 STATE_PATH = os.path.join(STATE_DIR, "state.json")
 
-# Weekly logs
-WEEKLY_OFFICIAL_PATH = os.path.join(STATE_DIR, "weekly_official.jsonl")  # transactions wire
-WEEKLY_REPORTS_PATH = os.path.join(STATE_DIR, "weekly_reports.jsonl")    # RSS matches
+WEEKLY_OFFICIAL_PATH = os.path.join(STATE_DIR, "weekly_official.jsonl")
+WEEKLY_REPORTS_PATH = os.path.join(STATE_DIR, "weekly_reports.jsonl")
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
@@ -105,14 +104,15 @@ def ensure_state_files():
         with open(STATE_PATH, "w", encoding="utf-8") as f:
             json.dump(
                 {
-                    "last_run_utc": None,          # for transactions since window
-                    "player_cache": {},            # name -> mlbam_id
-                    "seen_rss_ids": [],            # dedupe RSS
-                    "last_daily_local_date": None  # prevent double-send
+                    "last_run_utc": None,
+                    "player_cache": {},
+                    "seen_rss_ids": [],
+                    "last_daily_local_date": None,
                 },
                 f,
                 indent=2,
             )
+
     for p in [WEEKLY_OFFICIAL_PATH, WEEKLY_REPORTS_PATH]:
         if not os.path.exists(p):
             with open(p, "w", encoding="utf-8") as f:
@@ -177,69 +177,68 @@ def send_email(subject: str, body: str):
 
 
 # ----------------------------
-# Roster parsing (TSV/CSV)
+# Roster parsing (Fantrax multi-section CSV)
 # ----------------------------
-def _sniff_delimiter(path: str) -> str:
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        sample = f.read(8192)
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=[",", "\t", ";", "|"])
-        return dialect.delimiter
-    except Exception:
-        return "\t" if sample.count("\t") > sample.count(",") else ","
-
-
 def load_roster() -> pd.DataFrame:
     """
-    Returns dataframe with columns:
-      - player_name
-      - team_abbrev (if present)
-    Handles Fantrax TSVs with no header.
+    Fantrax exports can have section label rows like:
+      "","Hitting"
+      header row...
+      data rows...
+      "","Pitching"
+      header row...
+      data rows...
+
+    This parser:
+      - detects header rows containing Player/Team
+      - collects all player names across sections
+      - returns a dataframe with player_name, team_abbrev
     """
-    delim = _sniff_delimiter(ROSTER_PATH)
+    players = []
+    teams = []
 
-    try:
-        df = pd.read_csv(ROSTER_PATH, sep=delim, engine="python")
-    except Exception:
-        df = pd.read_csv(ROSTER_PATH, sep=delim, engine="python", on_bad_lines="skip")
+    idx_player = None
+    idx_team = None
 
-    # If headers look wrong, reload headerless
-    if len(df.columns) == 1 or (isinstance(df.columns[0], str) and df.columns[0].startswith("*")):
-        try:
-            df = pd.read_csv(ROSTER_PATH, sep=delim, engine="python", header=None, on_bad_lines="skip")
-        except Exception:
-            df = pd.read_csv(ROSTER_PATH, sep=delim, engine="python", header=None)
+    with open(ROSTER_PATH, "r", encoding="utf-8", errors="ignore", newline="") as f:
+        rdr = csv.reader(f)
+        for row in rdr:
+            if not row:
+                continue
 
-        # Based on Fantrax export pattern: col2 = Name, col3 = Team
-        name_series = df.iloc[:, 2].astype(str).str.strip()
-        team_series = df.iloc[:, 3].astype(str).str.strip() if df.shape[1] > 3 else ""
-        out = pd.DataFrame({"player_name": name_series, "team_abbrev": team_series})
-    else:
-        cols_lower = {c.lower(): c for c in df.columns if isinstance(c, str)}
-        name_col = None
-        for key in ["player", "player name", "name"]:
-            if key in cols_lower:
-                name_col = cols_lower[key]
-                break
-        if name_col is None:
-            name_col = df.columns[0]
+            # Section label row resets header
+            if len(row) == 2 and row[0] == "" and row[1] in ("Hitting", "Pitching"):
+                idx_player = None
+                idx_team = None
+                continue
 
-        team_col = None
-        for key in ["team", "mlb team", "org", "organization"]:
-            if key in cols_lower:
-                team_col = cols_lower[key]
-                break
+            # Header row
+            if "Player" in row and "Team" in row:
+                idx_player = row.index("Player")
+                idx_team = row.index("Team")
+                continue
 
-        out = pd.DataFrame(
-            {
-                "player_name": df[name_col].astype(str).str.strip(),
-                "team_abbrev": df[team_col].astype(str).str.strip() if team_col else "",
-            }
-        )
+            if idx_player is None:
+                continue
 
-    out = out[out["player_name"].ne("")]
-    out = out[~out["player_name"].str.lower().isin(["player", "player name", "name"])]
-    out["player_name"] = out["player_name"].str.replace(r"\s*\(.*\)\s*$", "", regex=True).str.strip()
+            if len(row) <= idx_player:
+                continue
+
+            name = (row[idx_player] or "").strip()
+            if not name or name.lower() == "player":
+                continue
+
+            team = ""
+            if idx_team is not None and len(row) > idx_team:
+                team = (row[idx_team] or "").strip()
+
+            # Clean
+            name = re.sub(r"\s*\(.*\)\s*$", "", name).strip()
+
+            players.append(name)
+            teams.append(team)
+
+    out = pd.DataFrame({"player_name": players, "team_abbrev": teams})
     out = out.drop_duplicates(subset=["player_name"]).reset_index(drop=True)
     return out
 
@@ -265,7 +264,7 @@ def lookup_mlbam_id(player_name: str, state) -> int | None:
 
 
 # ----------------------------
-# OFFICIAL: Transactions wire
+# OFFICIAL: Transactions wire (per player)
 # ----------------------------
 def fetch_transactions(mlbam_id: int) -> list[dict]:
     try:
@@ -309,17 +308,14 @@ def _content_id(source: str, title: str, link: str) -> str:
     return hashlib.sha1(raw).hexdigest()
 
 
-def _build_name_patterns(roster_names: list[str]) -> list[tuple[str, re.Pattern]]:
+def _build_name_patterns_full_only(roster_names: list[str]) -> list[tuple[str, re.Pattern]]:
+    # IMPORTANT: full-name matching ONLY to avoid false positives like the one you saw.
     patterns = []
     for full in roster_names:
         full = full.strip()
         if not full:
             continue
-        parts = full.split()
-        last = parts[-1] if parts else full
         patterns.append((full, re.compile(rf"\b{re.escape(full)}\b", re.IGNORECASE)))
-        if len(last) >= 5:
-            patterns.append((full, re.compile(rf"\b{re.escape(last)}\b", re.IGNORECASE)))
     return patterns
 
 
@@ -344,7 +340,7 @@ def fetch_reports_for_roster(
 ) -> list[dict]:
     rss_sources = _build_rss_sources(team_abbrevs)
     seen_set = set(state.get("seen_rss_ids", []))
-    patterns = _build_name_patterns(roster_names)
+    patterns = _build_name_patterns_full_only(roster_names)
 
     matched = []
     for src in rss_sources:
@@ -370,15 +366,15 @@ def fetch_reports_for_roster(
             if pub_dt is None:
                 pub_dt = now_utc()
 
-            players = set()
+            players = []
             for full_name, pat in patterns:
                 if pat.search(blob):
-                    players.add(full_name)
+                    players.append(full_name)
 
             if not players:
                 continue
 
-            for p in sorted(players):
+            for p in sorted(set(players)):
                 matched.append(
                     {
                         "utc": pub_dt.isoformat(),
@@ -389,9 +385,10 @@ def fetch_reports_for_roster(
                         "cid": cid,
                     }
                 )
+
             seen_set.add(cid)
 
-    state["seen_rss_ids"] = list(seen_set)[-5000:]
+    state["seen_rss_ids"] = list(seen_set)[-6000:]
     return matched
 
 
@@ -415,7 +412,7 @@ def _pct(n, d):
 
 
 def _ip_to_float(ip_val):
-    # MLB Stats API often gives IP as a string like "12.1" (12 + 1/3)
+    # MLB Stats API often gives IP as string like "12.1" (12 + 1/3)
     if ip_val is None:
         return None
     try:
@@ -553,12 +550,15 @@ def stats_tables_all_players(roster_names, name_to_id, year, weekly_start, weekl
             return pd.DataFrame(columns=["Name"])
         df = pd.DataFrame(rows)
 
+        # Collapse multi-splits to most substantial
         if group == "hitting" and "G" in df.columns:
             df["G_num"] = pd.to_numeric(df["G"], errors="coerce").fillna(0)
             df = df.sort_values(["Name", "G_num"], ascending=[True, False]).drop_duplicates("Name", keep="first")
             df = df.drop(columns=["G_num"], errors="ignore")
         if group == "pitching" and "IP" in df.columns:
-            df["IP_num"] = pd.to_numeric(df["IP"].astype(str).str.replace(r"[^\d\.]", "", regex=True), errors="coerce").fillna(0)
+            # prioritize higher innings
+            tmp = df["IP"].astype(str).str.replace(r"[^\d\.]", "", regex=True)
+            df["IP_num"] = pd.to_numeric(tmp, errors="coerce").fillna(0)
             df = df.sort_values(["Name", "IP_num"], ascending=[True, False]).drop_duplicates("Name", keep="first")
             df = df.drop(columns=["IP_num"], errors="ignore")
 
@@ -603,23 +603,19 @@ def stats_tables_all_players(roster_names, name_to_id, year, weekly_start, weekl
     pitchers_week = merge_fill(pitchers_week_mlb, pitchers_week_milb, pitcher_cols)
     pitchers_season = merge_fill(pitchers_season_mlb, pitchers_season_milb, pitcher_cols)
 
-    # FanGraphs overlay: applies to any player that appears in the MLB FanGraphs tables
+    # FanGraphs overlay (MLB tables only; blanks otherwise)
     try:
         fg_bat = batting_stats(year)
         fg_pit = pitching_stats(year)
 
         if "wRC+" in fg_bat.columns:
-            hitters_season = hitters_season.merge(
-                fg_bat[["Name", "wRC+"]], on="Name", how="left", suffixes=("", "_fg")
-            )
+            hitters_season = hitters_season.merge(fg_bat[["Name", "wRC+"]], on="Name", how="left", suffixes=("", "_fg"))
             if "wRC+_fg" in hitters_season.columns:
                 hitters_season["wRC+"] = hitters_season["wRC+_fg"].combine_first(hitters_season["wRC+"])
                 hitters_season = hitters_season.drop(columns=["wRC+_fg"])
 
         if "FIP" in fg_pit.columns:
-            pitchers_season = pitchers_season.merge(
-                fg_pit[["Name", "FIP"]], on="Name", how="left", suffixes=("", "_fg")
-            )
+            pitchers_season = pitchers_season.merge(fg_pit[["Name", "FIP"]], on="Name", how="left", suffixes=("", "_fg"))
             if "FIP_fg" in pitchers_season.columns:
                 pitchers_season["FIP"] = pitchers_season["FIP_fg"].combine_first(pitchers_season["FIP"])
                 pitchers_season = pitchers_season.drop(columns=["FIP_fg"])
@@ -642,14 +638,11 @@ def is_daily_send_time(state: dict) -> bool:
     if ln.hour != 6:
         return False
     today_str = ln.strftime("%Y-%m-%d")
-    if state.get("last_daily_local_date") == today_str:
-        return False
-    return True
+    return state.get("last_daily_local_date") != today_str
 
 
 def mark_daily_sent(state: dict):
-    ln = local_now()
-    state["last_daily_local_date"] = ln.strftime("%Y-%m-%d")
+    state["last_daily_local_date"] = local_now().strftime("%Y-%m-%d")
 
 
 def run_daily(lookback_hours: int | None = None):
@@ -658,13 +651,14 @@ def run_daily(lookback_hours: int | None = None):
     roster_names = roster_df["player_name"].tolist()
     team_abbrevs = roster_df["team_abbrev"].tolist() if "team_abbrev" in roster_df.columns else []
 
+    print(f"[roster] players={len(roster_names)} sample={roster_names[:10]}")
+
     if os.getenv("IS_SCHEDULED", "0") == "1":
         if not is_daily_send_time(state):
             print("[daily] scheduled run but not 6am CT (or already sent). Skipping.")
             save_state(state)
             return
 
-    # Determine since window
     if lookback_hours is not None:
         since = now_utc() - timedelta(hours=lookback_hours)
     else:
@@ -676,6 +670,7 @@ def run_daily(lookback_hours: int | None = None):
         else:
             since = now_utc() - timedelta(hours=24)
 
+    # OFFICIAL transactions
     official_found = []
     for player in roster_names:
         pid = lookup_mlbam_id(player, state)
@@ -686,6 +681,7 @@ def run_daily(lookback_hours: int | None = None):
             append_jsonl(WEEKLY_OFFICIAL_PATH, {"player": player, **it})
             official_found.append((player, it["desc"], it["utc"]))
 
+    # RSS reports/quotes
     reports = fetch_reports_for_roster(roster_names, team_abbrevs, state)
     for r in reports:
         append_jsonl(
@@ -702,13 +698,9 @@ def run_daily(lookback_hours: int | None = None):
 
     state["last_run_utc"] = now_utc().isoformat()
 
-    print(
-        f"[daily] since={since.isoformat()} official_items={len(official_found)} "
-        f"reports_items={len(reports)} roster={len(roster_names)}"
-    )
+    print(f"[daily] since={since.isoformat()} official_items={len(official_found)} reports_items={len(reports)} roster={len(roster_names)}")
 
     if not official_found and not reports:
-        # Quiet mode: no email when nothing matched
         if os.getenv("IS_SCHEDULED", "0") == "1":
             mark_daily_sent(state)
         save_state(state)
@@ -749,7 +741,7 @@ def run_daily(lookback_hours: int | None = None):
 
 def should_send_weekly_now() -> bool:
     ln = local_now()
-    return ln.weekday() == 0 and ln.hour == 7  # Monday 7am CT
+    return ln.weekday() == 0 and ln.hour == 7
 
 
 def build_weekly_email_body() -> str:
@@ -874,7 +866,7 @@ def run_news_test():
 
 
 def run_daily_realnews_test():
-    # Look back 60 days to maximize matches while you validate everything
+    # Look back 60 days while validating
     run_daily(lookback_hours=24 * 60)
 
 
@@ -901,9 +893,7 @@ def main():
     elif mode == "weekly":
         run_weekly()
     else:
-        raise SystemExit(
-            "RUN_MODE must be one of: daily, weekly, smtp_test, news_test, daily_realnews_test, weekly_test"
-        )
+        raise SystemExit("RUN_MODE must be one of: daily, weekly, smtp_test, news_test, daily_realnews_test, weekly_test")
 
 
 if __name__ == "__main__":
