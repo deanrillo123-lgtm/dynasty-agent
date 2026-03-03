@@ -1,4 +1,14 @@
 {
-  "last_run_utc": null,
-  "player_cache": {}
+  "last_run_utc": "2026-03-03T16:07:07.117498+00:00",
+  "player_cache": {
+    "E": {
+      "mlbam_id": 671096
+    },
+    "0": {
+      "mlbam_id": 671096
+    },
+    "None": {
+      "mlbam_id": 695506
+    }
+  }
 }
