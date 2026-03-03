@@ -2,22 +2,21 @@ name: Dynasty Agent
 
 on:
   schedule:
-    # Daily news check (quiet if no news)
-    - cron: "0 14 * * *"
+    # Daily around 6am Chicago (DST-safe; Python gates to exactly 6am CT)
+    - cron: "0 11 * * *"
+    - cron: "0 12 * * *"
 
-    # Monday runs around 7am Chicago.
-    # We run two UTC times to cover DST; script gates on Monday 7am CT.
+    # Weekly around 7am Chicago on Monday (DST-safe; Python gates to Mon 7am CT)
     - cron: "0 12 * * 1"
     - cron: "0 13 * * 1"
 
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "daily | weekly | smtp_test | news_test | weekly_test"
+        description: "daily | weekly | smtp_test | news_test | daily_realnews_test | weekly_test"
         required: true
         default: "smtp_test"
 
-# Prevent overlapping runs that both try to commit/push state
 concurrency:
   group: dynasty-agent-main
   cancel-in-progress: true
@@ -54,7 +53,8 @@ jobs:
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           ROSTER_PATH: roster.csv
           RUN_MODE: ${{ inputs.run_mode }}
-        run: python agent.py
+          IS_SCHEDULED: "0"
+        run: python -u agent.py
 
       - name: Run daily (scheduled)
         if: github.event_name == 'schedule'
@@ -64,7 +64,8 @@ jobs:
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           ROSTER_PATH: roster.csv
           RUN_MODE: daily
-        run: python agent.py
+          IS_SCHEDULED: "1"
+        run: python -u agent.py
 
       - name: Run weekly (scheduled)
         if: github.event_name == 'schedule'
@@ -74,25 +75,18 @@ jobs:
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           ROSTER_PATH: roster.csv
           RUN_MODE: weekly
-        run: python agent.py
+          IS_SCHEDULED: "1"
+        run: python -u agent.py
 
-      - name: Commit state/news logs (if changed)
+      - name: Commit state/logs (if changed)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           mkdir -p state
-          touch state/state.json state/weekly_news.jsonl
-
-          git add state/state.json state/weekly_news.jsonl || true
+          touch state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl
+          git add state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl || true
           git diff --cached --quiet && echo "No state changes to commit" && exit 0
-
-          # Commit locally
           git commit -m "Update agent state"
-
-          # Rebase onto latest main (fixes 'fetch first' rejects)
           git fetch origin main
           git rebase origin/main
-
-          # Push
           git push origin HEAD:main
