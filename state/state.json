@@ -1,5 +1,5 @@
 {
-  "last_run_utc": "2026-03-03T18:27:51.478306+00:00",
+  "last_run_utc": "2026-03-03T21:03:44.047032+00:00",
   "player_cache": {
     "E": {
       "mlbam_id": 671096
@@ -9,7 +9,84 @@
     },
     "None": {
       "mlbam_id": 695506
+    },
+    "Shea Langeliers": {
+      "mlbam_id": 669127
+    },
+    "Christian Moore": {
+      "mlbam_id": 695681
+    },
+    "Jordan Westburg": {
+      "mlbam_id": 676059
+    },
+    "Masyn Winn": {
+      "mlbam_id": 691026
+    },
+    "Michael Harris II": {
+      "mlbam_id": 671739
+    },
+    "Brandon Marsh": {
+      "mlbam_id": 669016
+    },
+    "Andy Pages": {
+      "mlbam_id": 681624
+    },
+    "Elly De La Cruz": {
+      "mlbam_id": 682829
+    },
+    "CJ Kayfus": {
+      "mlbam_id": 692216
+    },
+    "Juan Brito": {
+      "mlbam_id": 682877
+    },
+    "Hao-Yu Lee": {
+      "mlbam_id": 701678
+    },
+    "Hendry Mendez": {
+      "mlbam_id": 694230
+    },
+    "Yennier Cano": {
+      "mlbam_id": 666974
+    },
+    "Peyton Pallette": {
+      "mlbam_id": 688883
+    },
+    "Tanner Bibee": {
+      "mlbam_id": 676440
+    },
+    "Robert Gasser": {
+      "mlbam_id": 688107
+    },
+    "Josiah Gray": {
+      "mlbam_id": 680686
+    },
+    "Nolan McLean": {
+      "mlbam_id": 690997
+    },
+    "Paul Skenes": {
+      "mlbam_id": 694973
+    },
+    "Randy Vasquez": {
+      "mlbam_id": 681190
+    },
+    "Gerrit Cole": {
+      "mlbam_id": 543037
+    },
+    "Dustin May": {
+      "mlbam_id": 669160
+    },
+    "Christian Scott": {
+      "mlbam_id": 681035
+    },
+    "Cade Winquest": {
+      "mlbam_id": 685464
+    },
+    "Didier Fuentes": {
+      "mlbam_id": 800311
     }
   },
-  "seen_rss_ids": []
+  "seen_rss_ids": [
+    "5786f3b93f1ac933534657bb1118e268132bf73a"
+  ]
 }
