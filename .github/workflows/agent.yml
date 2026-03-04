@@ -24,7 +24,7 @@ on:
 # Prevent overlapping runs that both try to commit/push state
 concurrency:
   group: dynasty-agent-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
