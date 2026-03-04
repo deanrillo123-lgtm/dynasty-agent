@@ -2,13 +2,13 @@ name: Dynasty Agent
 
 on:
   schedule:
-    # Run hourly to cover daily + weekly + overnight adds.
-    # Python gates by Chicago time.
+    # Run hourly; Python gates by America/Chicago time (DST-safe)
     - cron: "0 * * * *"
+
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "daily | weekly | smtp_test | news_test | daily_realnews_test | weekly_test | adds_build"
+        description: "daily | weekly | adds_build | smtp_test | news_test | daily_realnews_test | weekly_test"
         required: true
         default: "smtp_test"
         type: choice
@@ -50,6 +50,42 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Decide what scheduled run should do (Chicago-time gating)
+      - name: Decide scheduled RUN_MODE (Chicago time)
+        if: github.event_name == 'schedule'
+        run: |
+          python - << 'PY'
+          from datetime import datetime, time
+          import pytz
+
+          tz = pytz.timezone("America/Chicago")
+          now = datetime.now(tz)
+          wd = now.weekday()  # Mon=0 ... Sun=6
+
+          # Adds build window: Wed(2), Sat(5), Sun(6) from 00:01 to 06:30 CT
+          in_adds_day = wd in (2, 5, 6)
+          in_adds_window = (now.time() >= time(0, 1) and now.time() <= time(6, 30))
+
+          # Daily at 06:00 CT
+          is_daily_time = (now.hour == 6)
+
+          # Weekly at Mon 07:00 CT
+          is_weekly_time = (wd == 0 and now.hour == 7)
+
+          if in_adds_day and in_adds_window:
+              mode = "adds_build"
+          elif is_weekly_time:
+              mode = "weekly"
+          elif is_daily_time:
+              mode = "daily"
+          else:
+              mode = "noop"
+
+          print(f"Selected mode: {mode} @ {now.isoformat()}")
+          with open("run_mode.txt", "w", encoding="utf-8") as f:
+              f.write(mode)
+          PY
+
       - name: Run (manual)
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -68,7 +104,7 @@ jobs:
           IS_SCHEDULED: "0"
         run: python -u agent.py
 
-      - name: Run scheduled daily (quiet if no news)
+      - name: Run scheduled (mode selected)
         if: github.event_name == 'schedule'
         env:
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
@@ -82,27 +118,25 @@ jobs:
           BP_RANK_GID: ${{ secrets.BP_RANK_GID }}
           TOP500_GID: ${{ secrets.TOP500_GID }}
 
-          RUN_MODE: daily
           IS_SCHEDULED: "1"
-        run: python -u agent.py
+        run: |
+          MODE=$(cat run_mode.txt || echo "noop")
+          if [ "$MODE" = "noop" ]; then
+            echo "No scheduled work for this hour."
+            exit 0
+          fi
 
-      - name: Run scheduled weekly
-        if: github.event_name == 'schedule'
-        env:
-          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          echo "Running RUN_MODE=$MODE"
+          export RUN_MODE="$MODE"
 
-          GSHEET_ID: ${{ secrets.GSHEET_ID }}
-          ROSTER_GID: ${{ secrets.ROSTER_GID }}
-          AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
-          DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
-          BP_RANK_GID: ${{ secrets.BP_RANK_GID }}
-          TOP500_GID: ${{ secrets.TOP500_GID }}
-
-          RUN_MODE: weekly
-          IS_SCHEDULED: "1"
-        run: python -u agent.py
+          # Hard kill to prevent endless runs:
+          # - adds_build gets up to 6h45m
+          # - daily/weekly get 45m
+          if [ "$MODE" = "adds_build" ]; then
+            timeout 6h45m python -u agent.py
+          else
+            timeout 45m python -u agent.py
+          fi
 
       - name: Commit state/logs (if changed)
         run: |
@@ -110,9 +144,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           mkdir -p state
-          touch state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl
+          touch state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl state/adds_cache.json
 
-          git add state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl || true
+          git add state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl state/adds_cache.json || true
           git diff --cached --quiet && echo "No state changes to commit" && exit 0
 
           git commit -m "Update agent state"
