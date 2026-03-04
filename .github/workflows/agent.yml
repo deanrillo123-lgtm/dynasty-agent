@@ -2,18 +2,13 @@ name: Dynasty Agent
 
 on:
   schedule:
-    # Daily around 6am Chicago (DST-safe; Python gates to exactly 6am CT)
-    - cron: "0 11 * * *"
-    - cron: "0 12 * * *"
-
-    # Weekly around 7am Chicago on Monday (DST-safe; Python gates to Mon 7am CT)
-    - cron: "0 11 * * 1"
-    - cron: "0 12 * * 1"
-
+    # Run hourly to cover daily + weekly + overnight adds.
+    # Python gates by Chicago time.
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "daily | weekly | smtp_test | news_test | daily_realnews_test | weekly_test"
+        description: "daily | weekly | smtp_test | news_test | daily_realnews_test | weekly_test | adds_build"
         required: true
         default: "smtp_test"
         type: choice
@@ -24,6 +19,7 @@ on:
           - weekly_test
           - daily
           - weekly
+          - adds_build
 
 # Prevent overlapping runs that both try to commit/push state
 concurrency:
