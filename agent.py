@@ -1779,7 +1779,7 @@ def run_weekly(force=False):
     roster_df = load_roster()
     roster_df["position"] = roster_df.get("position","").fillna("").astype(str)
     roster_names = roster_df["player_name"].tolist()
-
+    
     name_to_id = {}
     for nm in roster_names:
         pid = lookup_mlbam_id(nm, state)
@@ -1787,9 +1787,10 @@ def run_weekly(force=False):
             name_to_id[nm] = pid
     save_state(state)
 
-   "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
+    roster_pids = [int(x) for x in name_to_id.values() if x]
 
     official_news = read_jsonl(WEEKLY_OFFICIAL_PATH)
+  
     reports_news = read_jsonl(WEEKLY_REPORTS_PATH)
 
     w_start, w_end = previous_monday_sunday_window(now_local)
