@@ -1869,20 +1869,20 @@ def run_weekly(force=False):
             "Team": team,
             "Level": level,
             "Position": pos,
-            "W G": wk.get("gamesPlayed","") if wk else "",
-            "W H": wk.get("hits","") if wk else "",
-            "W HR": wk.get("homeRuns","") if wk else "",
-            "W RBI": wk.get("rbi","") if wk else "",
-            "W SB": wk.get("stolenBases","") if wk else "",
-            "W AVG": wk.get("avg","") if wk else "",
-            "W OBP": wk.get("obp","") if wk else "",
-            "S G": ss.get("gamesPlayed","") if ss else "",
-            "S H": ss.get("hits","") if ss else "",
-            "S HR": ss.get("homeRuns","") if ss else "",
-            "S RBI": ss.get("rbi","") if ss else "",
-            "S SB": ss.get("stolenBases","") if ss else "",
-            "S AVG": ss.get("avg","") if ss else "",
-            "S OBP": ss.get("obp","") if ss else "",
+            "G": wk.get("gamesPlayed","") if wk else "",
+            "H": wk.get("hits","") if wk else "",
+            "HR": wk.get("homeRuns","") if wk else "",
+            "RBI": wk.get("rbi","") if wk else "",
+            "SB": wk.get("stolenBases","") if wk else "",
+            "AVG": wk.get("avg","") if wk else "",
+            "OBP": wk.get("obp","") if wk else "",
+            "Game": ss.get("gamesPlayed","") if ss else "",
+            "Hits": ss.get("hits","") if ss else "",
+            "HR": ss.get("homeRuns","") if ss else "",
+            "RBI": ss.get("rbi","") if ss else "",
+            "SB": ss.get("stolenBases","") if ss else "",
+            "AVG": ss.get("avg","") if ss else "",
+            "OBP": ss.get("obp","") if ss else "",
             "OPS": (fg_adv or {}).get("OPS","") if fg_adv else "",
             "wRC+": (fg_adv or {}).get("wRC+","") if fg_adv else "",
             "K%": (fg_adv or {}).get("K%","") if fg_adv else "",
@@ -1925,16 +1925,16 @@ def run_weekly(force=False):
             "Team": team,
             "Level": level,
             "Position": pos,
-            "W GS": wk.get("gamesStarted","") if wk else "",
-            "W IP": wk.get("inningsPitched","") if wk else "",
-            "W ERA": wk.get("era","") if wk else "",
-            "W SO": wk.get("strikeOuts","") if wk else "",
-            "W BB": wk.get("baseOnBalls","") if wk else "",
-            "S GS": ss.get("gamesStarted","") if ss else "",
-            "S IP": ss.get("inningsPitched","") if ss else "",
-            "S ERA": ss.get("era","") if ss else "",
-            "S SO": ss.get("strikeOuts","") if ss else "",
-            "S BB": ss.get("baseOnBalls","") if ss else "",
+            "GS": wk.get("gamesStarted","") if wk else "",
+            "IP": wk.get("inningsPitched","") if wk else "",
+            "ERA": wk.get("era","") if wk else "",
+            "SO": wk.get("strikeOuts","") if wk else "",
+            "BB": wk.get("baseOnBalls","") if wk else "",
+            "Starts": ss.get("gamesStarted","") if ss else "",
+            "Innings": ss.get("inningsPitched","") if ss else "",
+            "ERA": ss.get("era","") if ss else "",
+            "SO": ss.get("strikeOuts","") if ss else "",
+            "BB": ss.get("baseOnBalls","") if ss else "",
             "FIP": (fg_adv or {}).get("FIP","") if fg_adv else "",
             "K%": (fg_adv or {}).get("K%","") if fg_adv else "",
             "BB%": (fg_adv or {}).get("BB%","") if fg_adv else "",
@@ -2057,7 +2057,7 @@ def run_weekly(force=False):
                 )
             html.append("</div>")
 
-    html.append(section_header("Two-Start Pitchers (Mon–Sun)", "#1a73e8"))
+    html.append(section_header("Two-Start Pitchers", "#1a73e8"))
     if not two_start_list:
         html.append("<div style='color:#666;'>No 2-start probables detected (or probables not posted yet).</div>")
     else:
@@ -2068,12 +2068,11 @@ def run_weekly(force=False):
         html.append("</ul>")
 
     html.append(section_header("Hot Week Performances", "#f9ab00"))
-    html.append("<div style='color:#666; margin-bottom:8px;'>Thresholds: HR ≥ 3, SB ≥ 4, OPS ≥ .950; SP: GS≥1 & ERA&lt;1.50; RP: SV+HLD ≥ 3.</div>")
     html.append(render_table_html(hot_hit_df, "Hot Hitters", html_cols=set()))
-    html.append(render_table_html(hot_sp_df, "Hot Starters (GS≥1, ERA<1.50)", html_cols=set()))
-    html.append(render_table_html(hot_rp_df, "Hot Relievers (SV+HLD≥3)", html_cols=set()))
+    html.append(render_table_html(hot_sp_df, "Hot Starters", html_cols=set()))
+    html.append(render_table_html(hot_rp_df, "Hot Relievers", html_cols=set()))
 
-    html.append(section_header("Weekly and Season Stats", "#1a73e8"))
+    html.append("<div style='border-top:2px solid #d0d0d0; margin:16px 0;'></div>")
     if not hitters_mlb.empty:
         html.append(render_table_html(hitters_mlb, "MLB Hitters (sorted by position)", html_cols={"Savant"}))
     else:
