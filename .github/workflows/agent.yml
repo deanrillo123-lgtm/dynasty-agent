@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "daily | weekly | adds_build | smtp_test | news_test | daily_realnews_test | weekly_test"
+        description: "daily | weekly | smtp_test | news_test | daily_realnews_test | weekly_test"
         required: true
         default: "smtp_test"
         type: choice
@@ -19,9 +19,7 @@ on:
           - weekly_test
           - daily
           - weekly
-          - adds_build
 
-# Prevent overlapping runs that both try to commit/push state
 concurrency:
   group: dynasty-agent-main
   cancel-in-progress: false
@@ -50,21 +48,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Decide what scheduled run should do (Chicago-time gating)
       - name: Decide scheduled RUN_MODE (Chicago time)
         if: github.event_name == 'schedule'
         run: |
           python - << 'PY'
-          from datetime import datetime, time
+          from datetime import datetime
           import pytz
 
           tz = pytz.timezone("America/Chicago")
           now = datetime.now(tz)
           wd = now.weekday()  # Mon=0 ... Sun=6
-
-          # Adds build window: Wed(2), Sat(5), Sun(6) from 00:01 to 06:30 CT
-          in_adds_day = wd in (2, 5, 6)
-          in_adds_window = (now.time() >= time(0, 1) and now.time() <= time(6, 30))
 
           # Daily at 06:00 CT
           is_daily_time = (now.hour == 6)
@@ -72,9 +65,7 @@ jobs:
           # Weekly at Mon 07:00 CT
           is_weekly_time = (wd == 0 and now.hour == 7)
 
-          if in_adds_day and in_adds_window:
-              mode = "adds_build"
-          elif is_weekly_time:
+          if is_weekly_time:
               mode = "weekly"
           elif is_daily_time:
               mode = "daily"
@@ -129,17 +120,16 @@ jobs:
           echo "Running RUN_MODE=$MODE"
           export RUN_MODE="$MODE"
 
-          # Hard kill to prevent endless runs:
-          # - adds_build gets up to 6h45m
-          # - daily/weekly get 45m
-          if [ "$MODE" = "adds_build" ]; then
-            timeout 6h45m python -u agent.py
-          else
-            timeout 45m python -u agent.py
-          fi
+          timeout 45m python -u agent.py
 
       - name: Commit state/logs (if changed)
         run: |
+          MODE=$(cat run_mode.txt 2>/dev/null || echo "manual")
+          if [ "$MODE" = "noop" ]; then
+            echo "Skipping commit on noop."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
