@@ -20,14 +20,13 @@ SENDER = os.getenv("EMAIL_ADDRESS", "").strip()
 SENDER_PW = os.getenv("EMAIL_PASSWORD", "").strip()
 RECIPIENT = os.getenv("RECIPIENT_EMAIL", "").strip()
 
-# Fallback local roster path (kept for safety)
 ROSTER_PATH = os.getenv("ROSTER_PATH", "roster.csv")
 
-# Google Sheet config
 GSHEET_ID = os.getenv("GSHEET_ID", "").strip()
 ROSTER_GID = os.getenv("ROSTER_GID", "").strip()
 AVAILABLE_GID = os.getenv("AVAILABLE_GID", "").strip()
 DD_RANK_GID = os.getenv("DD_RANK_GID", "").strip()
+BP_RANK_GID = os.getenv("BP_RANK_GID", "").strip()
 
 STATE_DIR = "state"
 STATE_PATH = os.path.join(STATE_DIR, "state.json")
@@ -276,11 +275,6 @@ def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
 # Roster + Available + Rankings
 # ----------------------------
 def load_roster():
-    """
-    Primary: Google Sheet roster paste tab (GSHEET_ID + ROSTER_GID).
-    Expects a player column like: Player / player_name / Name
-    Optional team column like: Team / team_abbrev
-    """
     if GSHEET_ID and ROSTER_GID:
         df = read_sheet_tab_csv(GSHEET_ID, ROSTER_GID)
         player_col = _pick_col(df, ["player", "player_name", "name", "playername"])
@@ -304,10 +298,9 @@ def load_roster():
         out = pd.DataFrame({"player_name": players, "team_abbrev": teams})
         return out.drop_duplicates(subset=["player_name"]).reset_index(drop=True)
 
-    # Fallback: local Fantrax export format
+    # fallback local
     players = []
     teams = []
-
     idx_player = None
     idx_team = None
 
@@ -339,10 +332,6 @@ def load_roster():
 
 
 def load_available_players() -> pd.DataFrame:
-    """
-    Loads available/free agent players from Google Sheet tab AVAILABLE_GID.
-    Expects a player column like: Player / player_name / Name
-    """
     if not (GSHEET_ID and AVAILABLE_GID):
         return pd.DataFrame(columns=["player_name"])
 
@@ -363,18 +352,10 @@ def load_available_players() -> pd.DataFrame:
 
 
 def load_dynasty_dugout_rankings() -> pd.DataFrame:
-    """
-    Loads Dynasty Dugout rankings from Google Sheet tab DD_RANK_GID.
-    Expected columns:
-      - player name: Player / player_name / Name
-      - rank: Rank / ranking
-      - (optional) tier / notes
-    """
     if not (GSHEET_ID and DD_RANK_GID):
         return pd.DataFrame(columns=["player_name", "dd_rank"])
 
     df = read_sheet_tab_csv(GSHEET_ID, DD_RANK_GID)
-
     name_col = _pick_col(df, ["player", "player_name", "name", "playername"])
     rank_col = _pick_col(df, ["rank", "ranking", "dd_rank"])
     tier_col = _pick_col(df, ["tier"])
@@ -398,13 +379,48 @@ def load_dynasty_dugout_rankings() -> pd.DataFrame:
 
         tier = str(row.get(tier_col, "")).strip() if tier_col else ""
         notes = str(row.get(notes_col, "")).strip() if notes_col else ""
-
         rows.append({"player_name": name, "dd_rank": rk, "tier": tier, "notes": notes})
 
     out = pd.DataFrame(rows)
     if out.empty:
         return pd.DataFrame(columns=["player_name", "dd_rank"])
     return out.sort_values("dd_rank").drop_duplicates("player_name", keep="first").reset_index(drop=True)
+
+
+def load_baseball_prospectus_rankings() -> pd.DataFrame:
+    if not (GSHEET_ID and BP_RANK_GID):
+        return pd.DataFrame(columns=["player_name", "bp_rank"])
+
+    df = read_sheet_tab_csv(GSHEET_ID, BP_RANK_GID)
+    name_col = _pick_col(df, ["player", "player_name", "name", "playername"])
+    rank_col = _pick_col(df, ["rank", "ranking", "bp_rank"])
+    tier_col = _pick_col(df, ["tier"])
+    notes_col = _pick_col(df, ["notes", "note"])
+
+    if not name_col or not rank_col:
+        return pd.DataFrame(columns=["player_name", "bp_rank"])
+
+    rows = []
+    for _, row in df.iterrows():
+        name = str(row.get(name_col, "")).strip()
+        if not name or name.lower() in ("player", "name"):
+            continue
+        name = re.sub(r"\s*\(.*\)$", "", name).strip()
+
+        rk_raw = str(row.get(rank_col, "")).strip()
+        try:
+            rk = int(float(rk_raw))
+        except Exception:
+            continue
+
+        tier = str(row.get(tier_col, "")).strip() if tier_col else ""
+        notes = str(row.get(notes_col, "")).strip() if notes_col else ""
+        rows.append({"player_name": name, "bp_rank": rk, "bp_tier": tier, "bp_notes": notes})
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return pd.DataFrame(columns=["player_name", "bp_rank"])
+    return out.sort_values("bp_rank").drop_duplicates("player_name", keep="first").reset_index(drop=True)
 
 
 # ----------------------------
@@ -524,7 +540,6 @@ def fetch_reports(roster_names, state):
         {"name": "MLBTR Transactions", "url": MLBTR_TX_FEED},
         {"name": "CBS MLB", "url": CBS_MLB_RSS},
     ]
-
     sources.extend(_build_google_news_sources(roster_names))
 
     seen = set(state.get("seen_rss_ids", []))
@@ -584,8 +599,240 @@ def fetch_reports(roster_names, state):
 
 
 # ----------------------------
-# Weekly stats (MLB + MiLB, with FG overlay when available)
+# Daily schedule gate
 # ----------------------------
+def is_daily_time(state):
+    ln = local_now()
+    if ln.hour != 6:
+        return False
+    today = ln.strftime("%Y-%m-%d")
+    return state.get("last_daily_local_date") != today
+
+
+def mark_daily_sent(state):
+    state["last_daily_local_date"] = local_now().strftime("%Y-%m-%d")
+
+
+# ----------------------------
+# Daily email build
+# ----------------------------
+def build_daily_bodies(official_items, reports, roster_df, title_str):
+    team_by_player = dict(zip(roster_df["player_name"].tolist(), roster_df.get("team_abbrev", pd.Series(dtype=str)).tolist()))
+
+    text = []
+    text.append(f"Dynasty Daily Update — {title_str}")
+    text.append("")
+    text.append("Transaction Wire (Official)")
+    if official_items:
+        for it in official_items:
+            nm = it["player"]
+            tm = team_by_player.get(nm, "")
+            hdr = f"{nm} ({tm})" if tm else nm
+            text.append(f"- {hdr}: {it['desc']}")
+    else:
+        text.append("No official transactions.")
+    text.append("")
+    text.append("Reports / Quotes")
+    if reports:
+        for r in reports:
+            nm = r["player"]
+            tm = team_by_player.get(nm, "")
+            hdr = f"{nm} ({tm})" if tm else nm
+            text.append(f"- {hdr}: {r['title']} [{r['source']}] {r['link']}")
+    else:
+        text.append("No matched reports.")
+    text_body = "\n".join(text)
+
+    html = []
+    html.append("<html><body style='font-family:Arial, Helvetica, sans-serif; line-height:1.35; color:#111;'>")
+    html.append(f"<h2 style='margin:0 0 8px 0;'>Dynasty Daily Update — {h(title_str)}</h2>")
+
+    html.append(section_header("Transaction Wire (Official)", "#0b8043"))
+    if official_items:
+        by_player = {}
+        for it in official_items:
+            by_player.setdefault(it["player"], []).append(it)
+
+        for player in sorted(by_player.keys()):
+            tm = team_by_player.get(player, "")
+            hdr = f"{player} ({tm})" if tm else player
+            html.append(
+                "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
+                f"<div style='font-size:16px; margin-bottom:8px;'><b>{h(hdr)}</b></div>"
+                "<ul style='margin:0; padding-left:18px;'>"
+            )
+            for it in by_player[player]:
+                html.append(f"<li style='margin:6px 0;'>{h(it['desc'])}</li>")
+            html.append("</ul></div>")
+    else:
+        html.append("<div style='color:#666;'>No official transactions.</div>")
+
+    html.append(section_header("Reports / Quotes", "#1a73e8"))
+    if reports:
+        by_player = {}
+        for r in reports:
+            by_player.setdefault(r["player"], []).append(r)
+
+        for player in sorted(by_player.keys()):
+            tm = team_by_player.get(player, "")
+            hdr = f"{player} ({tm})" if tm else player
+            html.append(
+                "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
+                f"<div style='font-size:16px; margin-bottom:8px;'><b>{h(hdr)}</b></div>"
+            )
+            for r in by_player[player]:
+                html.append(
+                    "<div style='margin:10px 0 0 0; padding-top:10px; border-top:1px solid #f0f0f0;'>"
+                    f"<div style='margin:0 0 6px 0;'>{h(r['title'])}</div>"
+                    "<div style='display:flex; gap:10px; align-items:center; flex-wrap:wrap;'>"
+                    f"<span style='color:#555; font-size:13px;'>Source: {h(r['source'])}</span>"
+                    f"{button(r['link'], 'News', bg='#1a73e8')}"
+                    "</div></div>"
+                )
+            html.append("</div>")
+    else:
+        html.append("<div style='color:#666;'>No matched reports.</div>")
+
+    html.append("</body></html>")
+    html_body = "".join(html)
+
+    return text_body, html_body
+
+
+# ----------------------------
+# Daily runner
+# ----------------------------
+def run_daily(lookback_hours=None):
+    state = load_state()
+    roster_df = load_roster()
+    roster = roster_df["player_name"].tolist()
+
+    print(f"[roster] players={len(roster)} sample={roster[:10]}")
+
+    if os.getenv("IS_SCHEDULED", "0") == "1":
+        if not is_daily_time(state):
+            print("[daily] Skipping - not 6am CT (or already sent).")
+            save_state(state)
+            return
+
+    since = now_utc() - timedelta(hours=lookback_hours or 24)
+
+    official_items = []
+    for player in roster:
+        pid = lookup_mlbam_id(player, state)
+        if not pid:
+            continue
+        tx = tx_since(fetch_transactions(pid), since)
+        for t in tx:
+            official_items.append({"player": player, "desc": t["desc"], "utc": t["utc"]})
+            append_jsonl(WEEKLY_OFFICIAL_PATH, {"player": player, **t})
+
+    reports = fetch_reports(roster, state)
+    for r in reports:
+        append_jsonl(WEEKLY_REPORTS_PATH, r)
+
+    official_items_sorted = sorted(official_items, key=lambda x: x["utc"])
+    reports_sorted = sorted(reports, key=lambda x: (x["player"], x["source"], x["title"]))
+
+    print(f"[daily] official_items={len(official_items_sorted)} reports_items={len(reports_sorted)}")
+
+    if not official_items_sorted and not reports_sorted:
+        if os.getenv("IS_SCHEDULED", "0") == "1":
+            mark_daily_sent(state)
+        save_state(state)
+        return
+
+    title_str = local_now().strftime("%b %d")
+    text_body, html_body = build_daily_bodies(official_items_sorted, reports_sorted, roster_df, title_str)
+
+    send_email(f"Dynasty Daily Update — {title_str}", text_body, html_body)
+
+    if os.getenv("IS_SCHEDULED", "0") == "1":
+        mark_daily_sent(state)
+
+    state["last_run_utc"] = now_utc().isoformat()
+    save_state(state)
+
+
+# ----------------------------
+# Weekly runner (basic tests + send)
+# NOTE: This weekly function uses the logged news for the week (jsonl),
+# which are filled by the daily runs.
+# ----------------------------
+
+def should_send_weekly_now():
+    ln = local_now()
+    return ln.weekday() == 0 and ln.hour == 7  # Monday 7am CT
+
+
+def mark_weekly_sent(state):
+    state["last_weekly_local_date"] = local_now().strftime("%Y-%m-%d")
+
+
+def is_injury_text(s: str) -> bool:
+    t = (s or "").lower()
+    return any(k in t for k in INJURY_KEYWORDS)
+
+
+def hot_week_sections(hitters_week: pd.DataFrame, pitchers_week: pd.DataFrame):
+    hot_hitters = []
+    hot_pitchers = []
+
+    if hitters_week is not None and not hitters_week.empty:
+        hw = hitters_week.copy()
+        hw["HRn"] = pd.to_numeric(hw.get("HR"), errors="coerce")
+        hw["SBn"] = pd.to_numeric(hw.get("SB"), errors="coerce")
+        for _, r in hw.iterrows():
+            hr = r.get("HRn")
+            sb = r.get("SBn")
+            if (pd.notna(sb) and sb >= 4) or (pd.notna(hr) and hr >= 3):
+                hot_hitters.append({
+                    "Name": r.get("Name"),
+                    "HR": "" if pd.isna(hr) else int(hr),
+                    "SB": "" if pd.isna(sb) else int(sb),
+                    "Level": r.get("Level") or ""
+                })
+
+    if pitchers_week is not None and not pitchers_week.empty:
+        pw = pitchers_week.copy()
+        pw["ERAn"] = pd.to_numeric(pw.get("ERA"), errors="coerce")
+        for _, r in pw.iterrows():
+            era = r.get("ERAn")
+            if pd.notna(era) and era < 1.50:
+                hot_pitchers.append({
+                    "Name": r.get("Name"),
+                    "ERA": float(era),
+                    "IP": r.get("IP") or "",
+                    "Level": r.get("Level") or ""
+                })
+
+    return hot_hitters, hot_pitchers
+
+
+def filter_reports_excluding_injuries(reports_news, injury_players):
+    out = []
+    for it in reports_news:
+        p = it.get("player","")
+        title = it.get("title","")
+        if p in injury_players and is_injury_text(title):
+            continue
+        out.append(it)
+    return out
+
+
+def slugify_name_for_savant(name: str) -> str:
+    s = (name or "").strip().lower()
+    s = re.sub(r"[^a-z0-9\s-]", "", s)
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s
+
+
+def baseball_savant_url(player_name: str, mlbam_id: int) -> str:
+    slug = slugify_name_for_savant(player_name)
+    return f"https://baseballsavant.mlb.com/savant-player/{slug}-{mlbam_id}"
+
+
 def _safe_div(n, d):
     try:
         if d in (0, 0.0, None):
@@ -740,7 +987,6 @@ def stats_tables_all_players(roster_names, name_to_id, year, weekly_start, weekl
             return pd.DataFrame(columns=["Name"])
         df = pd.DataFrame(rows)
 
-        # keep best split per player
         if group == "hitting" and "G" in df.columns:
             df["G_num"] = pd.to_numeric(df["G"], errors="coerce").fillna(0)
             df = df.sort_values(["Name", "G_num"], ascending=[True, False]).drop_duplicates("Name", keep="first")
@@ -822,7 +1068,7 @@ def add_weekly_links_and_media(df: pd.DataFrame, roster_df: pd.DataFrame, name_t
     if df is None or df.empty or "Name" not in df.columns:
         return df
 
-    team_by = dict(zip(roster_df["player_name"].tolist(), roster_df["team_abbrev"].tolist()))
+    team_by = dict(zip(roster_df["player_name"].tolist(), roster_df.get("team_abbrev", pd.Series(dtype=str)).tolist()))
     df2 = df.copy()
 
     photos = []
@@ -856,49 +1102,6 @@ def add_weekly_links_and_media(df: pd.DataFrame, roster_df: pd.DataFrame, name_t
     return df2
 
 
-# ----------------------------
-# Weekly extras
-# ----------------------------
-def is_injury_text(s: str) -> bool:
-    t = (s or "").lower()
-    return any(k in t for k in INJURY_KEYWORDS)
-
-
-def hot_week_sections(hitters_week: pd.DataFrame, pitchers_week: pd.DataFrame):
-    hot_hitters = []
-    hot_pitchers = []
-
-    if hitters_week is not None and not hitters_week.empty:
-        hw = hitters_week.copy()
-        hw["HRn"] = pd.to_numeric(hw.get("HR"), errors="coerce")
-        hw["SBn"] = pd.to_numeric(hw.get("SB"), errors="coerce")
-        for _, r in hw.iterrows():
-            hr = r.get("HRn")
-            sb = r.get("SBn")
-            if (pd.notna(sb) and sb >= 4) or (pd.notna(hr) and hr >= 3):
-                hot_hitters.append({
-                    "Name": r.get("Name"),
-                    "HR": "" if pd.isna(hr) else int(hr),
-                    "SB": "" if pd.isna(sb) else int(sb),
-                    "Level": r.get("Level") or ""
-                })
-
-    if pitchers_week is not None and not pitchers_week.empty:
-        pw = pitchers_week.copy()
-        pw["ERAn"] = pd.to_numeric(pw.get("ERA"), errors="coerce")
-        for _, r in pw.iterrows():
-            era = r.get("ERAn")
-            if pd.notna(era) and era < 1.50:
-                hot_pitchers.append({
-                    "Name": r.get("Name"),
-                    "ERA": float(era),
-                    "IP": r.get("IP") or "",
-                    "Level": r.get("Level") or ""
-                })
-
-    return hot_hitters, hot_pitchers
-
-
 def build_injury_watch(official_news, reports_news):
     by_player = {}
     seen_keys = set()
@@ -926,223 +1129,51 @@ def build_injury_watch(official_news, reports_news):
     return by_player
 
 
-def filter_reports_excluding_injuries(reports_news, injury_by_player):
-    injured_players = set(injury_by_player.keys())
-    out = []
-    for it in reports_news:
-        p = it.get("player","")
-        if p in injured_players and is_injury_text(it.get("title","")):
-            continue
-        out.append(it)
-    return out
-
-
 def best_effort_velocity_change():
-    # Placeholder: keeps weekly clean until we wire statcast safely later.
     return []
 
 
-# ----------------------------
-# Daily schedule gate
-# ----------------------------
-def is_daily_time(state):
-    ln = local_now()
-    if ln.hour != 6:
-        return False
-    today = ln.strftime("%Y-%m-%d")
-    return state.get("last_daily_local_date") != today
+def build_weekly_bodies(roster_df, state, name_to_id, official_news, reports_news,
+                        hitters_week, hitters_season, pitchers_week, pitchers_season):
 
-
-def mark_daily_sent(state):
-    state["last_daily_local_date"] = local_now().strftime("%Y-%m-%d")
-
-
-# ----------------------------
-# Daily email build
-# ----------------------------
-def build_daily_bodies(official_items, reports, roster_df, title_str):
-    team_by_player = dict(zip(roster_df["player_name"].tolist(), roster_df["team_abbrev"].tolist()))
-
-    text = []
-    text.append(f"Dynasty Daily Update — {title_str}")
-    text.append("")
-    text.append("Transaction Wire (Official)")
-    if official_items:
-        for it in official_items:
-            nm = it["player"]
-            tm = team_by_player.get(nm, "")
-            hdr = f"{nm} ({tm})" if tm else nm
-            text.append(f"- {hdr}: {it['desc']}")
-    else:
-        text.append("No official transactions.")
-    text.append("")
-    text.append("Reports / Quotes")
-    if reports:
-        for r in reports:
-            nm = r["player"]
-            tm = team_by_player.get(nm, "")
-            hdr = f"{nm} ({tm})" if tm else nm
-            text.append(f"- {hdr}: {r['title']} [{r['source']}] {r['link']}")
-    else:
-        text.append("No matched reports.")
-    text_body = "\n".join(text)
-
-    html = []
-    html.append("<html><body style='font-family:Arial, Helvetica, sans-serif; line-height:1.35; color:#111;'>")
-    html.append(f"<h2 style='margin:0 0 8px 0;'>Dynasty Daily Update — {h(title_str)}</h2>")
-
-    html.append(section_header("Transaction Wire (Official)", "#0b8043"))
-    if official_items:
-        by_player = {}
-        for it in official_items:
-            by_player.setdefault(it["player"], []).append(it)
-
-        for player in sorted(by_player.keys()):
-            tm = team_by_player.get(player, "")
-            hdr = f"{player} ({tm})" if tm else player
-            html.append(
-                "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
-                f"<div style='font-size:16px; margin-bottom:8px;'><b>{h(hdr)}</b></div>"
-                "<ul style='margin:0; padding-left:18px;'>"
-            )
-            for it in by_player[player]:
-                html.append(f"<li style='margin:6px 0;'>{h(it['desc'])}</li>")
-            html.append("</ul></div>")
-    else:
-        html.append("<div style='color:#666;'>No official transactions.</div>")
-
-    html.append(section_header("Reports / Quotes", "#1a73e8"))
-    if reports:
-        by_player = {}
-        for r in reports:
-            by_player.setdefault(r["player"], []).append(r)
-
-        for player in sorted(by_player.keys()):
-            tm = team_by_player.get(player, "")
-            hdr = f"{player} ({tm})" if tm else player
-            html.append(
-                "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
-                f"<div style='font-size:16px; margin-bottom:8px;'><b>{h(hdr)}</b></div>"
-            )
-            for r in by_player[player]:
-                html.append(
-                    "<div style='margin:10px 0 0 0; padding-top:10px; border-top:1px solid #f0f0f0;'>"
-                    f"<div style='margin:0 0 6px 0;'>{h(r['title'])}</div>"
-                    "<div style='display:flex; gap:10px; align-items:center; flex-wrap:wrap;'>"
-                    f"<span style='color:#555; font-size:13px;'>Source: {h(r['source'])}</span>"
-                    f"{button(r['link'], 'News', bg='#1a73e8')}"
-                    "</div></div>"
-                )
-            html.append("</div>")
-    else:
-        html.append("<div style='color:#666;'>No matched reports.</div>")
-
-    html.append("</body></html>")
-    html_body = "".join(html)
-
-    return text_body, html_body
-
-
-# ----------------------------
-# Daily runner
-# ----------------------------
-def run_daily(lookback_hours=None):
-    state = load_state()
-    roster_df = load_roster()
-    roster = roster_df["player_name"].tolist()
-
-    print(f"[roster] players={len(roster)} sample={roster[:10]}")
-
-    if os.getenv("IS_SCHEDULED", "0") == "1":
-        if not is_daily_time(state):
-            print("[daily] Skipping - not 6am CT (or already sent).")
-            save_state(state)
-            return
-
-    since = now_utc() - timedelta(hours=lookback_hours or 24)
-
-    official_items = []
-    for player in roster:
-        pid = lookup_mlbam_id(player, state)
-        if not pid:
-            continue
-        tx = tx_since(fetch_transactions(pid), since)
-        for t in tx:
-            official_items.append({"player": player, "desc": t["desc"], "utc": t["utc"]})
-            append_jsonl(WEEKLY_OFFICIAL_PATH, {"player": player, **t})
-
-    reports = fetch_reports(roster, state)
-    for r in reports:
-        append_jsonl(WEEKLY_REPORTS_PATH, r)
-
-    official_items_sorted = sorted(official_items, key=lambda x: x["utc"])
-    reports_sorted = sorted(reports, key=lambda x: (x["player"], x["source"], x["title"]))
-
-    print(f"[daily] official_items={len(official_items_sorted)} reports_items={len(reports_sorted)}")
-
-    if not official_items_sorted and not reports_sorted:
-        if os.getenv("IS_SCHEDULED", "0") == "1":
-            mark_daily_sent(state)
-        save_state(state)
-        return
-
-    title_str = local_now().strftime("%b %d")
-    text_body, html_body = build_daily_bodies(official_items_sorted, reports_sorted, roster_df, title_str)
-
-    send_email(f"Dynasty Daily Update — {title_str}", text_body, html_body)
-
-    if os.getenv("IS_SCHEDULED", "0") == "1":
-        mark_daily_sent(state)
-
-    state["last_run_utc"] = now_utc().isoformat()
-    save_state(state)
-
-
-# ----------------------------
-# Weekly schedule gate
-# ----------------------------
-def should_send_weekly_now():
-    ln = local_now()
-    return ln.weekday() == 0 and ln.hour == 7  # Monday 7am CT
-
-
-def mark_weekly_sent(state):
-    state["last_weekly_local_date"] = local_now().strftime("%Y-%m-%d")
-
-
-# ----------------------------
-# Weekly email build
-# ----------------------------
-def build_weekly_bodies(
-    roster_df,
-    state,
-    name_to_id,
-    official_news,
-    reports_news,
-    hitters_week,
-    hitters_season,
-    pitchers_week,
-    pitchers_season,
-):
     now_local = local_now()
     this_mon = (now_local - timedelta(days=now_local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     start = (this_mon - timedelta(days=7)).date()
     end = (this_mon - timedelta(days=1)).date()
 
-    team_by_player = dict(zip(roster_df["player_name"].tolist(), roster_df["team_abbrev"].tolist()))
-    injury_by_player = build_injury_watch(official_news, reports_news)
-    hot_hitters, hot_pitchers = hot_week_sections(hitters_week, pitchers_week)
-    filtered_reports = filter_reports_excluding_injuries(reports_news, injury_by_player)
+    team_by_player = dict(zip(roster_df["player_name"].tolist(), roster_df.get("team_abbrev", pd.Series(dtype=str)).tolist()))
 
-    # Available prospects section (uses your sheet, filtered by Dynasty Dugout ranks)
+    injury_by_player = build_injury_watch(official_news, reports_news)
+    injury_players = set(injury_by_player.keys())
+    filtered_reports = filter_reports_excluding_injuries(reports_news, injury_players)
+
+    hot_hitters, hot_pitchers = hot_week_sections(hitters_week, pitchers_week)
+
     available_df = load_available_players()
     dd_rank_df = load_dynasty_dugout_rankings()
+    bp_rank_df = load_baseball_prospectus_rankings()
 
     top_available = pd.DataFrame()
-    if not available_df.empty and not dd_rank_df.empty:
-        top_available = available_df.merge(dd_rank_df, on="player_name", how="inner").sort_values("dd_rank").head(20)
+    if not available_df.empty:
+        merged = available_df.copy()
 
-    # Add media + links to stats tables
+        if not dd_rank_df.empty:
+            merged = merged.merge(dd_rank_df[["player_name", "dd_rank"]], on="player_name", how="left")
+        else:
+            merged["dd_rank"] = None
+
+        if not bp_rank_df.empty:
+            merged = merged.merge(bp_rank_df[["player_name", "bp_rank"]], on="player_name", how="left")
+        else:
+            merged["bp_rank"] = None
+
+        merged["dd_rank_num"] = pd.to_numeric(merged["dd_rank"], errors="coerce")
+        merged["bp_rank_num"] = pd.to_numeric(merged["bp_rank"], errors="coerce")
+        merged["best_rank"] = merged[["dd_rank_num", "bp_rank_num"]].min(axis=1, skipna=True)
+        merged = merged[pd.notna(merged["best_rank"])].sort_values("best_rank").head(25)
+
+        top_available = merged
+
     hitters_week2 = add_weekly_links_and_media(hitters_week, roster_df, name_to_id, state)
     hitters_season2 = add_weekly_links_and_media(hitters_season, roster_df, name_to_id, state)
     pitchers_week2 = add_weekly_links_and_media(pitchers_week, roster_df, name_to_id, state)
@@ -1162,7 +1193,7 @@ def build_weekly_bodies(
         "</div>"
     )
 
-    # 1) Transaction wire
+    # Transaction wire
     html.append(section_header("Transaction Wire (Official)", "#0b8043"))
     if not official_news:
         html.append("<div style='color:#666;'>No official transactions logged this week.</div>")
@@ -1193,7 +1224,7 @@ def build_weekly_bodies(
                 html.append(f"<li style='margin:6px 0;'>{h(it.get('desc',''))}</li>")
             html.append("</ul></div>")
 
-    # 2) Injuries
+    # Injuries
     html.append(section_header("Injury Watch", "#d93025"))
     if not injury_by_player:
         html.append("<div style='color:#666;'>No injuries detected in logged items this week.</div>")
@@ -1223,7 +1254,7 @@ def build_weekly_bodies(
                 )
             html.append("</div>")
 
-    # 3) Hot performances
+    # Hot week
     html.append(section_header("Hot Week Performances", "#f9ab00"))
     if not hot_hitters and not hot_pitchers:
         html.append("<div style='color:#666;'>No hot-week thresholds met (SB ≥ 4, HR ≥ 3, or ERA < 1.50).</div>")
@@ -1241,35 +1272,34 @@ def build_weekly_bodies(
                 html.append(f"<li style='margin:6px 0;'><b>{h(it['Name'])}</b> — {h(str(it.get('Level','')))} | ERA: {h(str(it.get('ERA','')))} | IP: {h(str(it.get('IP','')))}</li>")
             html.append("</ul>")
 
-    # Optional section: Top Available (Dynasty Dugout)
-    html.append(section_header("Top Available Prospects (Dynasty Dugout)", "#5f6368"))
+    # Top Available Prospects
+    html.append(section_header("Top Available Prospects (DD + BP)", "#5f6368"))
     if top_available is None or top_available.empty:
-        html.append("<div style='color:#666;'>No matches between your Available list and Dynasty Dugout rankings.</div>")
+        html.append("<div style='color:#666;'>No matches between your Available list and DD/BP rankings.</div>")
     else:
-        html.append("<div style='color:#555; font-size:13px; margin-bottom:8px;'>Filtered strictly to players listed in your <b>avaliableplayers</b> tab.</div>")
+        html.append("<div style='color:#555; font-size:13px; margin-bottom:8px;'>Filtered strictly to players listed in your <b>avaliableplayers</b> tab. Sorted by best (lowest) DD or BP rank.</div>")
         html.append("<ul style='margin:6px 0 0 0; padding-left:18px;'>")
         for _, r in top_available.iterrows():
             nm = str(r.get("player_name", ""))
-            rk = str(r.get("dd_rank", ""))
-            tier = str(r.get("tier", "")).strip()
-            extra = f" — Tier: {h(tier)}" if tier else ""
-            html.append(f"<li style='margin:6px 0;'><b>{h(nm)}</b> — Rank {h(rk)}{extra}</li>")
+            dd = r.get("dd_rank", "")
+            bp = r.get("bp_rank", "")
+            dd_str = f"DD {int(float(dd))}" if str(dd).strip() not in ("", "nan", "None") else "DD —"
+            bp_str = f"BP {int(float(bp))}" if str(bp).strip() not in ("", "nan", "None") else "BP —"
+            html.append(f"<li style='margin:6px 0;'><b>{h(nm)}</b> — {h(dd_str)} | {h(bp_str)}</li>")
         html.append("</ul>")
 
-    # 4) Stats tables (weekly + season)
+    # Weekly stats
     html.append(section_header("Weekly Stats", "#1a73e8"))
-    html.append("<div style='color:#555; font-size:13px; margin-bottom:10px;'>"
-                "wRC+ / FIP populate when FanGraphs MLB tables have them; otherwise blank. "
-                "MiLB pitching may use K/9 and BB/9 when K%/BB% aren’t available."
-                "</div>")
+    html.append("<div style='color:#555; font-size:13px; margin-bottom:10px;'>wRC+ / FIP populate when FanGraphs MLB tables have them; otherwise blank. MiLB pitching may use K/9 and BB/9 when K%/BB% aren’t available.</div>")
     html.append(render_table_html(hitters_week2, "Hitters — Weekly", html_cols={"Photo", "Team", "Links"}))
     html.append(render_table_html(pitchers_week2, "Pitchers — Weekly", html_cols={"Photo", "Team", "Links"}))
 
+    # Season stats
     html.append(section_header("Season-to-date Stats", "#1a73e8"))
     html.append(render_table_html(hitters_season2, "Hitters — Season", html_cols={"Photo", "Team", "Links"}))
     html.append(render_table_html(pitchers_season2, "Pitchers — Season", html_cols={"Photo", "Team", "Links"}))
 
-    # 5) Major news
+    # Major news
     html.append(section_header("Major News From The Week", "#5f6368"))
     if not filtered_reports:
         html.append("<div style='color:#666;'>No matched reports logged this week.</div>")
@@ -1301,7 +1331,7 @@ def build_weekly_bodies(
                 )
             html.append("</div>")
 
-    # 6) Velocity placeholder
+    # Velocity placeholder
     html.append(section_header("Velocity Change Tracker", "#0b8043"))
     velo = best_effort_velocity_change()
     if not velo:
@@ -1313,13 +1343,10 @@ def build_weekly_bodies(
     return text_body, html_body
 
 
-# ----------------------------
-# Weekly runner
-# ----------------------------
-def run_weekly():
+def run_weekly(force=False):
     state = load_state()
 
-    if os.getenv("IS_SCHEDULED", "0") == "1":
+    if os.getenv("IS_SCHEDULED", "0") == "1" and not force:
         if not should_send_weekly_now():
             print("[weekly] Skipping - not Monday 7am CT.")
             save_state(state)
@@ -1336,17 +1363,17 @@ def run_weekly():
     official_news = read_jsonl(WEEKLY_OFFICIAL_PATH)
     reports_news = read_jsonl(WEEKLY_REPORTS_PATH)
 
-    now_local = local_now()
-    this_mon = (now_local - timedelta(days=now_local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    weekly_start = (this_mon - timedelta(days=7)).date()
-    weekly_end = (this_mon - timedelta(days=1)).date()
-
     name_to_id = {}
     for nm in roster_names:
         pid = lookup_mlbam_id(nm, state)
         if pid:
             name_to_id[nm] = pid
     save_state(state)
+
+    now_local = local_now()
+    this_mon = (now_local - timedelta(days=now_local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    weekly_start = (this_mon - timedelta(days=7)).date()
+    weekly_end = (this_mon - timedelta(days=1)).date()
 
     year = now_local.year
     try:
@@ -1390,8 +1417,14 @@ def run_weekly():
 # Test Modes
 # ----------------------------
 def run_smtp_test():
+    print("[smtp_test] Starting...")
+    print(f"[smtp_test] SENDER set? {bool(SENDER)} | PW set? {bool(SENDER_PW)} | RECIPIENT={RECIPIENT}")
+    if not (SENDER and SENDER_PW and RECIPIENT):
+        raise RuntimeError("Missing EMAIL_ADDRESS / EMAIL_PASSWORD / RECIPIENT_EMAIL")
+
     subject = f"SMTP Test — {local_now().strftime('%b %d %I:%M %p %Z')}"
     send_email(subject, "If you received this, SMTP works.", "<b>If you received this, SMTP works.</b>")
+    print("[smtp_test] send_email() returned without exception.")
 
 
 def run_daily_realnews_test():
@@ -1399,55 +1432,7 @@ def run_daily_realnews_test():
 
 
 def run_weekly_test():
-    # Run weekly regardless of day/time
-    state = load_state()
-    roster_df = load_roster()
-    roster_names = roster_df["player_name"].tolist()
-
-    name_to_id = {}
-    for nm in roster_names:
-        pid = lookup_mlbam_id(nm, state)
-        if pid:
-            name_to_id[nm] = pid
-    save_state(state)
-
-    now_local = local_now()
-    this_mon = (now_local - timedelta(days=now_local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    weekly_start = (this_mon - timedelta(days=7)).date()
-    weekly_end = (this_mon - timedelta(days=1)).date()
-
-    official_news = read_jsonl(WEEKLY_OFFICIAL_PATH)
-    reports_news = read_jsonl(WEEKLY_REPORTS_PATH)
-
-    year = now_local.year
-    try:
-        hitters_week, hitters_season, pitchers_week, pitchers_season = stats_tables_all_players(
-            roster_names=roster_names,
-            name_to_id=name_to_id,
-            year=year,
-            weekly_start=weekly_start,
-            weekly_end=weekly_end,
-        )
-    except Exception as e:
-        print(f"[weekly_test] Stats error: {e}")
-        hitters_week = pd.DataFrame()
-        hitters_season = pd.DataFrame()
-        pitchers_week = pd.DataFrame()
-        pitchers_season = pd.DataFrame()
-
-    text_body, html_body = build_weekly_bodies(
-        roster_df=roster_df,
-        state=state,
-        name_to_id=name_to_id,
-        official_news=official_news,
-        reports_news=reports_news,
-        hitters_week=hitters_week,
-        hitters_season=hitters_season,
-        pitchers_week=pitchers_week,
-        pitchers_season=pitchers_season,
-    )
-
-    send_email("Dynasty Weekly Report — TEST", text_body, html_body)
+    run_weekly(force=True)
 
 
 def main():
