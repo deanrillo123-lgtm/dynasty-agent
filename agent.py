@@ -2063,12 +2063,12 @@ def run_weekly(force=False):
 
     two_start_list = two_start_pitchers_week(roster_df)
 
-hot_hit_df, hot_sp_df, hot_rp_df = hot_week_tables(
-    roster_info[["player_name", "position"]],
-    name_to_id,
-    {**week_hit_mlb, **week_hit_milb},
-    {**week_pit_mlb, **week_pit_milb},
-)
+    hot_hit_df, hot_sp_df, hot_rp_df = hot_week_tables(
+        roster_info[["player_name", "position"]],
+        name_to_id,
+        {**week_hit_mlb, **week_hit_milb},
+        {**week_pit_mlb, **week_pit_milb},
+    )
 
 def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
     status = build_status_html(name, injury_players, wk or {}, is_pitcher=False)
