@@ -2167,7 +2167,7 @@ def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None)
         hitters_milb = pd.DataFrame()
 
     def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
-    status = build_status_html(name, injury_players, wk or {}, is_pitcher=True)
+        status = build_status_html(name, injury_players, wk or {}, is_pitcher=True)
 
     # Compute season K/9 and BB/9 for both MLB and MiLB
     ip_season = (ss or {}).get("inningsPitched", "")
