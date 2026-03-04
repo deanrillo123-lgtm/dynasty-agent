@@ -47,35 +47,47 @@ jobs:
 
       - name: Run (manual)
         if: github.event_name == 'workflow_dispatch'
-        env:
-          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          ROSTER_PATH: roster.csv
-          RUN_MODE: ${{ inputs.run_mode }}
-          IS_SCHEDULED: "0"
+       env:
+  EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+  RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+  GSHEET_ID: ${{ secrets.GSHEET_ID }}
+  ROSTER_GID: ${{ secrets.ROSTER_GID }}
+  AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
+  DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
+  ROSTER_PATH: roster.csv
+  RUN_MODE: daily
+  IS_SCHEDULED: "1"
         run: python -u agent.py
 
       - name: Run daily (scheduled)
         if: github.event_name == 'schedule'
-        env:
-          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          ROSTER_PATH: roster.csv
-          RUN_MODE: daily
-          IS_SCHEDULED: "1"
+env:
+  EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+  RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+  GSHEET_ID: ${{ secrets.GSHEET_ID }}
+  ROSTER_GID: ${{ secrets.ROSTER_GID }}
+  AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
+  DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
+  ROSTER_PATH: roster.csv
+  RUN_MODE: daily
+  IS_SCHEDULED: "1"
         run: python -u agent.py
 
       - name: Run weekly (scheduled)
         if: github.event_name == 'schedule'
-        env:
-          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          ROSTER_PATH: roster.csv
-          RUN_MODE: weekly
-          IS_SCHEDULED: "1"
+env:
+  EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+  RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+  GSHEET_ID: ${{ secrets.GSHEET_ID }}
+  ROSTER_GID: ${{ secrets.ROSTER_GID }}
+  AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
+  DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
+  ROSTER_PATH: roster.csv
+  RUN_MODE: daily
+  IS_SCHEDULED: "1"
         run: python -u agent.py
 
       - name: Commit state/logs (if changed)
