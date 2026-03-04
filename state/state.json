@@ -860,5 +860,29 @@
     "bb8d4b3f6346f9246c1843f79ead543a13fd36f4",
     "9dabb099eba692564c4b0537088595d1b29313d3",
     "611faa79e29fbdc545c876e591c79a052c0caccb"
-  ]
+  ],
+  "team_id_cache": {
+    "LAD": 143,
+    "PHI": 143,
+    "TB": 139,
+    "CLE": 114,
+    "NYY": 147,
+    "NYM": 121,
+    "DET": 116,
+    "ATL": 144,
+    "BOS": 111,
+    "STL": 138,
+    "CIN": 113,
+    "CHC": 112,
+    "SF": 137,
+    "MIN": 142,
+    "PIT": 134,
+    "TOR": 141,
+    "BAL": 110,
+    "SD": 135,
+    "MIA": 146,
+    "MIL": 158,
+    "ATH": 133
+  },
+  "last_weekly_local_date": "2026-03-03"
 }
