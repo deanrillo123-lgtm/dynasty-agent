@@ -1,90 +1,6 @@
 {
   "last_run_utc": "2026-03-04T04:00:55.079706+00:00",
   "player_cache": {
-    "E": {
-      "mlbam_id": 671096
-    },
-    "0": {
-      "mlbam_id": 671096
-    },
-    "None": {
-      "mlbam_id": 695506
-    },
-    "Shea Langeliers": {
-      "mlbam_id": 669127
-    },
-    "Christian Moore": {
-      "mlbam_id": 695681
-    },
-    "Jordan Westburg": {
-      "mlbam_id": 676059
-    },
-    "Masyn Winn": {
-      "mlbam_id": 691026
-    },
-    "Michael Harris II": {
-      "mlbam_id": 671739
-    },
-    "Brandon Marsh": {
-      "mlbam_id": 669016
-    },
-    "Andy Pages": {
-      "mlbam_id": 681624
-    },
-    "Elly De La Cruz": {
-      "mlbam_id": 682829
-    },
-    "CJ Kayfus": {
-      "mlbam_id": 692216
-    },
-    "Juan Brito": {
-      "mlbam_id": 682877
-    },
-    "Hao-Yu Lee": {
-      "mlbam_id": 701678
-    },
-    "Hendry Mendez": {
-      "mlbam_id": 694230
-    },
-    "Yennier Cano": {
-      "mlbam_id": 666974
-    },
-    "Peyton Pallette": {
-      "mlbam_id": 688883
-    },
-    "Tanner Bibee": {
-      "mlbam_id": 676440
-    },
-    "Robert Gasser": {
-      "mlbam_id": 688107
-    },
-    "Josiah Gray": {
-      "mlbam_id": 680686
-    },
-    "Nolan McLean": {
-      "mlbam_id": 690997
-    },
-    "Paul Skenes": {
-      "mlbam_id": 694973
-    },
-    "Randy Vasquez": {
-      "mlbam_id": 681190
-    },
-    "Gerrit Cole": {
-      "mlbam_id": 543037
-    },
-    "Dustin May": {
-      "mlbam_id": 669160
-    },
-    "Christian Scott": {
-      "mlbam_id": 681035
-    },
-    "Cade Winquest": {
-      "mlbam_id": 685464
-    },
-    "Didier Fuentes": {
-      "mlbam_id": 800311
-    },
     "Carlos Santana": 467793,
     "Phil Maton": 664208,
     "Liam Hicks": 689414,
@@ -615,7 +531,32 @@
     "Andrew Williamson": 810938,
     "Alex Young": 664849,
     "Chen Zhong-Ao Zhuang": 800018,
-    "Steven Zobac": 686632
+    "Steven Zobac": 686632,
+    "Shea Langeliers": 669127,
+    "Christian Moore": 695681,
+    "Jordan Westburg": 676059,
+    "Masyn Winn": 691026,
+    "Michael Harris II": 671739,
+    "Brandon Marsh": 669016,
+    "Andy Pages": 681624,
+    "Elly De La Cruz": 682829,
+    "CJ Kayfus": 692216,
+    "Juan Brito": 682877,
+    "Hao-Yu Lee": 701678,
+    "Hendry Mendez": 694230,
+    "Yennier Cano": 666974,
+    "Peyton Pallette": 688883,
+    "Tanner Bibee": 676440,
+    "Robert Gasser": 688107,
+    "Josiah Gray": 680686,
+    "Nolan McLean": 690997,
+    "Paul Skenes": 694973,
+    "Randy Vasquez": 681190,
+    "Gerrit Cole": 543037,
+    "Dustin May": 669160,
+    "Christian Scott": 681035,
+    "Cade Winquest": 685464,
+    "Didier Fuentes": 800311
   },
   "seen_rss_ids": [
     "08b0ec9a7786963435f9e5422e0da230090df336",
@@ -1441,11 +1382,11 @@
   "cache_files": {
     "savant_batter_2026": {
       "path": "state/savant_batter_2026.csv",
-      "fetched_utc": "2026-03-04T18:22:40.070977+00:00"
+      "fetched_utc": "2026-03-04T20:04:01.900492+00:00"
     },
     "savant_pitcher_2026": {
       "path": "state/savant_pitcher_2026.csv",
-      "fetched_utc": "2026-03-04T18:22:40.259092+00:00"
+      "fetched_utc": "2026-03-04T20:04:02.158428+00:00"
     }
   }
 }
