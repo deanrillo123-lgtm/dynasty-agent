@@ -108,7 +108,99 @@ def ensure_state_files():
         if not os.path.exists(p):
             with open(p, "w", encoding="utf-8") as f:
                 f.write("")
+def _stat_int(x):
+    try:
+        if x is None or x == "":
+            return None
+        return int(float(x))
+    except Exception:
+        return None
 
+def _stat_float(x):
+    try:
+        if x is None or x == "":
+            return None
+        return float(x)
+    except Exception:
+        return None
+
+def _red_cross_html() -> str:
+    return "<span style='color:#d93025;font-weight:900;'>✚</span>"
+
+def _spectacular_hitter_week(wk: dict) -> bool:
+    # "spectacular" only
+    ops = _stat_float(wk.get("ops"))
+    hr = _stat_int(wk.get("homeRuns"))
+    sb = _stat_int(wk.get("stolenBases"))
+    avg = _stat_float(wk.get("avg"))
+    ab  = _stat_int(wk.get("atBats"))
+    if ops is not None and ops >= 1.050:
+        return True
+    if hr is not None and hr >= 3:
+        return True
+    if sb is not None and sb >= 4:
+        return True
+    if (avg is not None and avg >= 0.400) and (ab is not None and ab >= 10):
+        return True
+    return False
+
+def _cold_hitter_week(wk: dict) -> bool:
+    ops = _stat_float(wk.get("ops"))
+    ab  = _stat_int(wk.get("atBats"))
+    if ops is None:
+        return False
+    if ab is None or ab < 10:
+        return False
+    return ops <= 0.500
+
+def _spectacular_pitcher_week(wk: dict) -> bool:
+    gs  = _stat_int(wk.get("gamesStarted"))
+    era = _stat_float(wk.get("era"))
+    so  = _stat_int(wk.get("strikeOuts"))
+    ipf = innings_to_float(wk.get("inningsPitched"))
+    sv  = _stat_int(wk.get("saves"))
+    hld = _stat_int(wk.get("holds"))
+
+    # Starter spectacular: lights out + Ks
+    if gs is not None and gs >= 1:
+        if era is not None and era <= 1.00 and so is not None and so >= 10 and ipf is not None and ipf >= 5.0:
+            return True
+        return False
+
+    # Reliever spectacular: big SV+HLD + spotless
+    total = (sv or 0) + (hld or 0)
+    if total >= 3 and era is not None and era <= 1.00 and ipf is not None and ipf >= 3.0:
+        return True
+    return False
+
+def _cold_pitcher_week(wk: dict) -> bool:
+    era = _stat_float(wk.get("era"))
+    ipf = innings_to_float(wk.get("inningsPitched"))
+    if era is None or ipf is None:
+        return False
+    return (era >= 7.00) and (ipf >= 4.0)
+
+def build_status_html(player_name: str, injury_players: set, wk: dict, is_pitcher: bool) -> str:
+    parts = []
+
+    # Injury first (ONLY if on injury list)
+    if player_name in injury_players:
+        parts.append(_red_cross_html())
+
+    # Hot/cold logic
+    if is_pitcher:
+        if _spectacular_pitcher_week(wk or {}):
+            parts.append("🔥")
+        elif _cold_pitcher_week(wk or {}):
+            parts.append("🧊")
+    else:
+        if _spectacular_hitter_week(wk or {}):
+            parts.append("🔥")
+        elif _cold_hitter_week(wk or {}):
+            parts.append("🧊")
+
+    return "".join(parts)
+    
 def load_state():
     ensure_state_files()
     with open(STATE_PATH, "r", encoding="utf-8") as f:
@@ -183,8 +275,15 @@ def button(url: str, label: str, bg: str = "#1a73e8") -> str:
         f"background:{bg}; color:#fff; text-decoration:none; font-size:13px; font-weight:600;'>"
         f"{h(label)}</a>"
     )
-
 def render_table_html(df: pd.DataFrame, title: str, html_cols=None) -> str:
+    """
+    Renders a table with:
+    - Optional grouped headers if columns are prefixed with "W " (week) and "S " (season)
+    - Week header label: "Last Week's Stats"
+    - Season header label: f"{current_year} Stats"
+    - Thick vertical divider between Week and Season groups (4px)
+    - Strips the displayed "W " / "S " prefixes from stat header names
+    """
     html_cols = set(html_cols or [])
     if df is None or df.empty:
         return f"<h4 style='margin:14px 0 6px 0;'>{h(title)}</h4><div style='color:#666;'>No data.</div>"
@@ -192,30 +291,105 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols=None) -> str:
     cols = list(df.columns)
     rows = df.fillna("").astype(str).values.tolist()
 
+    def is_w(c): return isinstance(c, str) and c.startswith("W ")
+    def is_s(c): return isinstance(c, str) and c.startswith("S ")
+
+    left_cols = [c for c in cols if not (is_w(c) or is_s(c))]
+    week_cols = [c for c in cols if is_w(c)]
+    season_cols = [c for c in cols if is_s(c)]
+
+    has_groups = bool(week_cols or season_cols)
+
+    # First season column index for thick divider in body rows
+    first_season_col = season_cols[0] if season_cols else None
+    first_season_idx = cols.index(first_season_col) if first_season_col in cols else None
+
+    year_label = f"{local_now().year} Stats"  # e.g. "2026 Stats"
+    week_label = "Last Week's Stats"
+
+    divider_css = "border-left:4px solid #111;"  # thick line
+
     out = []
     out.append(f"<h4 style='margin:16px 0 8px 0;'>{h(title)}</h4>")
     out.append("<div style='overflow-x:auto; border:1px solid #e8e8e8; border-radius:10px;'>")
     out.append("<table style='border-collapse:collapse; width:100%; font-size:12.5px;'>")
+    out.append("<thead>")
 
-    out.append("<thead><tr style='background:#f6f7f9;'>")
-    for c in cols:
-        out.append(
-            "<th style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
-            f"{h(str(c))}</th>"
-        )
-    out.append("</tr></thead>")
+    if has_groups:
+        # Row 1: Group headers
+        out.append("<tr style='background:#f6f7f9;'>")
 
+        # Left columns get rowspan=2
+        for c in left_cols:
+            out.append(
+                "<th rowspan='2' style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
+                f"{h(str(c))}</th>"
+            )
+
+        if week_cols:
+            out.append(
+                f"<th colspan='{len(week_cols)}' style='text-align:center; padding:8px 10px; "
+                f"border-bottom:1px solid #e8e8e8; white-space:nowrap;'>{h(week_label)}</th>"
+            )
+
+        if season_cols:
+            out.append(
+                f"<th colspan='{len(season_cols)}' style='text-align:center; padding:8px 10px; "
+                f"border-bottom:1px solid #e8e8e8; white-space:nowrap; {divider_css}'>{h(year_label)}</th>"
+            )
+
+        out.append("</tr>")
+
+        # Row 2: Stat headers (strip W/S prefixes)
+        out.append("<tr style='background:#f6f7f9;'>")
+
+        for c in week_cols:
+            label = str(c)[2:]  # drop "W "
+            out.append(
+                "<th style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
+                f"{h(label)}</th>"
+            )
+
+        for j, c in enumerate(season_cols):
+            label = str(c)[2:]  # drop "S "
+            lb = divider_css if j == 0 else ""
+            out.append(
+                f"<th style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap; {lb}'>"
+                f"{h(label)}</th>"
+            )
+
+        out.append("</tr>")
+
+    else:
+        # Normal single header row
+        out.append("<tr style='background:#f6f7f9;'>")
+        for c in cols:
+            out.append(
+                "<th style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
+                f"{h(str(c))}</th>"
+            )
+        out.append("</tr>")
+
+    out.append("</thead>")
     out.append("<tbody>")
+
     for i, r in enumerate(rows):
         bg = "#ffffff" if i % 2 == 0 else "#fbfbfc"
         out.append(f"<tr style='background:{bg};'>")
-        for c, cell in zip(cols, r):
+
+        for idx, (c, cell) in enumerate(zip(cols, r)):
             cell_html = cell if c in html_cols else h(cell)
-            out.append("<td style='padding:7px 10px; border-bottom:1px solid #f0f0f0; white-space:nowrap;'>"
-                       f"{cell_html}</td>")
+            lb = divider_css if (first_season_idx is not None and idx == first_season_idx) else ""
+            out.append(
+                f"<td style='padding:7px 10px; border-bottom:1px solid #f0f0f0; white-space:nowrap; {lb}'>"
+                f"{cell_html}</td>"
+            )
+
         out.append("</tr>")
+
     out.append("</tbody></table></div>")
     return "".join(out)
+
 
 # =========================
 # URLs
@@ -1516,6 +1690,19 @@ def compute_prospect_adds(
     out["Savant"] = out["pid_int"].apply(lambda x: button(baseball_savant_url(int(x)), "Savant", bg="#0b8043") if pd.notna(x) else "")
     out = out[["Name","Team","Level","Age","Position","dd_rank","bp_rank","Add Score","Urgency","Savant","mentions_7d","opp_7d"]]
     out = out.rename(columns={"dd_rank":"Dynasty Dugout","bp_rank":"Baseball Prospectus","mentions_7d":"Mentions (7d)","opp_7d":"Opp Hits (7d)"})
+        def _int_no_decimal(x):
+        s = str(x or "").strip()
+        if not s:
+            return ""
+        try:
+            return str(int(float(s)))
+        except Exception:
+            return s
+
+    if "Dynasty Dugout" in out.columns:
+        out["Dynasty Dugout"] = out["Dynasty Dugout"].apply(_int_no_decimal)
+    if "Baseball Prospectus" in out.columns:
+        out["Baseball Prospectus"] = out["Baseball Prospectus"].apply(_int_no_decimal)
     return out
 
 # =========================
@@ -1863,32 +2050,43 @@ def run_weekly(force=False):
         {**week_pit_mlb, **week_pit_milb},
     )
 
-    def hitter_row(name, team, level, pos, pid, wk, ss, fg_adv=None):
-        return {
-            "Player": name,
-            "Team": team,
-            "Level": level,
-            "Position": pos,
-            "G": wk.get("gamesPlayed","") if wk else "",
-            "H": wk.get("hits","") if wk else "",
-            "HR": wk.get("homeRuns","") if wk else "",
-            "RBI": wk.get("rbi","") if wk else "",
-            "SB": wk.get("stolenBases","") if wk else "",
-            "AVG": wk.get("avg","") if wk else "",
-            "OBP": wk.get("obp","") if wk else "",
-            "Game": ss.get("gamesPlayed","") if ss else "",
-            "Hits": ss.get("hits","") if ss else "",
-            "HR": ss.get("homeRuns","") if ss else "",
-            "RBI": ss.get("rbi","") if ss else "",
-            "SB": ss.get("stolenBases","") if ss else "",
-            "AVG": ss.get("avg","") if ss else "",
-            "OBP": ss.get("obp","") if ss else "",
-            "OPS": (fg_adv or {}).get("OPS","") if fg_adv else "",
-            "wRC+": (fg_adv or {}).get("wRC+","") if fg_adv else "",
-            "K%": (fg_adv or {}).get("K%","") if fg_adv else "",
-            "BB%": (fg_adv or {}).get("BB%","") if fg_adv else "",
-            "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
-        }
+    def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
+    status = build_status_html(name, injury_players, wk or {}, is_pitcher=False)
+
+    return {
+        "Status": status,
+        "Player": name,
+        "Team": team,
+        "Level": level,
+        "Position": pos,
+
+        # Week (displayed under "Last Week's Stats")
+        "W G": (wk or {}).get("gamesPlayed", ""),
+        "W H": (wk or {}).get("hits", ""),
+        "W HR": (wk or {}).get("homeRuns", ""),
+        "W RBI": (wk or {}).get("rbi", ""),
+        "W SB": (wk or {}).get("stolenBases", ""),
+        "W AVG": (wk or {}).get("avg", ""),
+        "W OBP": (wk or {}).get("obp", ""),
+        "W OPS": (wk or {}).get("ops", ""),
+
+        # Season (displayed under "2026 Stats")
+        "S G": (ss or {}).get("gamesPlayed", ""),
+        "S H": (ss or {}).get("hits", ""),
+        "S HR": (ss or {}).get("homeRuns", ""),
+        "S RBI": (ss or {}).get("rbi", ""),
+        "S SB": (ss or {}).get("stolenBases", ""),
+        "S AVG": (ss or {}).get("avg", ""),
+        "S OBP": (ss or {}).get("obp", ""),
+        "S OPS": (ss or {}).get("ops", ""),
+
+        # FG advanced (MLB only; included in Season group area)
+        "S wRC+": (fg_adv or {}).get("wRC+", "") if fg_adv else "",
+        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
+        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
+
+        "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
+    }
 
     hitters_rows = []
     for _, r in roster_info.iterrows():
@@ -1903,11 +2101,11 @@ def run_weekly(force=False):
         if r["is_mlb"]:
             wk = week_hit_mlb.get(pid, {}) if pid else {}
             ss = season_hit_mlb.get(pid, {}) if pid else {}
-            hitters_rows.append(hitter_row(nm, tm, "MLB", pos, pid, wk, ss, fg_hit_map.get(nm, {})))
+            hitters_rows.append(hitter_row(nm, tm, "MLB", pos, pid, wk, ss, injury_players, fg_hit_map.get(nm, {})))
         else:
             wk = week_hit_milb.get(pid, {}) if pid else {}
             ss = season_hit_milb.get(pid, {}) if pid else {}
-            hitters_rows.append(hitter_row(nm, tm, level, pos, pid, wk, ss, None))
+            hitters_rows.append(hitter_row(nm, tm, level, pos, pid, wk, ss, injury_players, None))
 
     hitters_df = pd.DataFrame(hitters_rows)
     if not hitters_df.empty:
@@ -1919,29 +2117,41 @@ def run_weekly(force=False):
         hitters_mlb = pd.DataFrame()
         hitters_milb = pd.DataFrame()
 
-    def pitcher_row(name, team, level, pos, pid, wk, ss, fg_adv=None, milb=False):
-        row = {
-            "Pitcher": name,
-            "Team": team,
-            "Level": level,
-            "Position": pos,
-            "GS": wk.get("gamesStarted","") if wk else "",
-            "IP": wk.get("inningsPitched","") if wk else "",
-            "ERA": wk.get("era","") if wk else "",
-            "SO": wk.get("strikeOuts","") if wk else "",
-            "BB": wk.get("baseOnBalls","") if wk else "",
-            "Starts": ss.get("gamesStarted","") if ss else "",
-            "Innings": ss.get("inningsPitched","") if ss else "",
-            "ERA": ss.get("era","") if ss else "",
-            "SO": ss.get("strikeOuts","") if ss else "",
-            "BB": ss.get("baseOnBalls","") if ss else "",
-            "FIP": (fg_adv or {}).get("FIP","") if fg_adv else "",
-            "K%": (fg_adv or {}).get("K%","") if fg_adv else "",
-            "BB%": (fg_adv or {}).get("BB%","") if fg_adv else "",
-            "K/9": "",
-            "BB/9": "",
-            "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
-        }
+    def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
+    status = build_status_html(name, injury_players, wk or {}, is_pitcher=True)
+
+    # Compute season K/9 and BB/9 for both MLB and MiLB
+    ip_season = (ss or {}).get("inningsPitched", "")
+    so_season = (ss or {}).get("strikeOuts", "")
+    bb_season = (ss or {}).get("baseOnBalls", "")
+    k9v = k9(so_season, ip_season)
+    bb9v = bb9(bb_season, ip_season)
+
+    return {
+        "Status": status,
+        "Pitcher": name,
+        "Team": team,
+        "Level": level,
+        "Position": pos,
+
+        # Week (displayed under "Last Week's Stats")
+        "W GS": (wk or {}).get("gamesStarted", ""),
+        "W IP": (wk or {}).get("inningsPitched", ""),
+        "W ERA": (wk or {}).get("era", ""),
+        "W SO": (wk or {}).get("strikeOuts", ""),
+        "W BB": (wk or {}).get("baseOnBalls", ""),
+
+        # Season (displayed under "2026 Stats")
+        "S Starts": (ss or {}).get("gamesStarted", ""),
+        "S Innings": (ss or {}).get("inningsPitched", ""),
+        "S FIP": (fg_adv or {}).get("FIP", "") if fg_adv else "",
+        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
+        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
+        "S K/9": f"{k9v:.2f}" if k9v is not None else "",
+        "S BB/9": f"{bb9v:.2f}" if bb9v is not None else "",
+
+        "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
+    }
         if milb:
             ip = ss.get("inningsPitched","") if ss else ""
             so = ss.get("strikeOuts","") if ss else ""
@@ -1965,11 +2175,11 @@ def run_weekly(force=False):
         if r["is_mlb"]:
             wk = week_pit_mlb.get(pid, {}) if pid else {}
             ss = season_pit_mlb.get(pid, {}) if pid else {}
-            pitchers_rows.append(pitcher_row(nm, tm, "MLB", pos, pid, wk, ss, fg_pit_map.get(nm, {}), milb=False))
+            pitchers_rows.append(pitcher_row(nm, tm, "MLB", pos, pid, wk, ss, injury_players, fg_pit_map.get(nm, {})))
         else:
             wk = week_pit_milb.get(pid, {}) if pid else {}
             ss = season_pit_milb.get(pid, {}) if pid else {}
-            pitchers_rows.append(pitcher_row(nm, tm, level, pos, pid, wk, ss, None, milb=True))
+            pitchers_rows.append(pitcher_row(nm, tm, level, pos, pid, wk, ss, injury_players, None))
 
     pitchers_df = pd.DataFrame(pitchers_rows)
     if not pitchers_df.empty:
@@ -2074,28 +2284,28 @@ def run_weekly(force=False):
 
     html.append("<div style='border-top:2px solid #d0d0d0; margin:16px 0;'></div>")
     if not hitters_mlb.empty:
-        html.append(render_table_html(hitters_mlb, "MLB Hitters (sorted by position)", html_cols={"Savant"}))
+        html.append(render_table_html(hitters_mlb, "MLB Hitters (sorted by position)", html_cols={"Status", "Savant"}))
     else:
         html.append("<div style='color:#666;'>No MLB hitters found.</div>")
 
     html.append("<div style='border-top:2px dashed #e0e0e0; margin:12px 0;'></div>")
 
     if not hitters_milb.empty:
-        html.append(render_table_html(hitters_milb, "Minor League Hitters (alphabetical)", html_cols={"Savant"}))
+        html.append(render_table_html(hitters_milb, "Minor League Hitters (alphabetical)", html_cols={"Status", "Savant"}))
     else:
         html.append("<div style='color:#666;'>No minor-league hitters found.</div>")
 
     html.append("<div style='border-top:2px dashed #e0e0e0; margin:12px 0;'></div>")
 
     if not pit_mlb.empty:
-        html.append(render_table_html(pit_mlb, "MLB Pitchers", html_cols={"Savant"}))
+        html.append(render_table_html(pit_mlb, "MLB Pitchers", html_cols={"Status", "Savant"}))
     else:
         html.append("<div style='color:#666;'>No MLB pitchers found.</div>")
 
     html.append("<div style='border-top:2px dashed #e0e0e0; margin:12px 0;'></div>")
 
     if not pit_milb.empty:
-        html.append(render_table_html(pit_milb, "Minor League Pitchers", html_cols={"Savant"}))
+        html.append(render_table_html(pit_milb, "Minor League Pitchers", html_cols={"Status", "Savant"}))
     else:
         html.append("<div style='color:#666;'>No minor-league pitchers found.</div>")
 
@@ -2152,7 +2362,7 @@ def run_weekly(force=False):
     if mlb_adds_df is None or mlb_adds_df.empty:
         html.append("<div style='color:#666;'>No MLB add candidates found in available pool (or MLB level couldn’t be detected).</div>")
     else:
-        html.append(render_table_html(mlb_adds_df, "Top MLB Adds (Available) — max 10", html_cols={"Savant"}))
+        html.append(render_table_html(mlb_adds_df, "Top MLB Adds (Available) — max 10", html_cols={"Status", "Savant"}))
 
     html.append(section_header("Prospect Adds", "#5f6368"))
     if prospect_adds_df is None or prospect_adds_df.empty:
