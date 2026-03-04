@@ -2,18 +2,18 @@ name: Dynasty Agent
 
 on:
   schedule:
-    # Daily around 6am Chicago (DST-safe; Python gates to exactly 6am CT)
+    # Daily around 6am Chicago (DST-safe)
     - cron: "0 11 * * *"
     - cron: "0 12 * * *"
 
-    # Weekly around 7am Chicago on Monday (DST-safe; Python gates to Mon 7am CT)
+    # Weekly around 7am Chicago Monday (DST-safe)
     - cron: "0 12 * * 1"
     - cron: "0 13 * * 1"
 
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "daily | weekly | smtp_test | news_test | daily_realnews_test | weekly_test"
+        description: "daily | weekly | smtp_test | daily_realnews_test | weekly_test"
         required: true
         default: "smtp_test"
 
@@ -27,78 +27,105 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ------------------------
+      # Manual run
+      # ------------------------
       - name: Run (manual)
         if: github.event_name == 'workflow_dispatch'
-       env:
-  EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
-  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-  RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-  GSHEET_ID: ${{ secrets.GSHEET_ID }}
-  ROSTER_GID: ${{ secrets.ROSTER_GID }}
-  AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
-  DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
-  ROSTER_PATH: roster.csv
-  RUN_MODE: daily
-  IS_SCHEDULED: "1"
-        run: python -u agent.py
+        env:
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
 
+          GSHEET_ID: ${{ secrets.GSHEET_ID }}
+          ROSTER_GID: ${{ secrets.ROSTER_GID }}
+          AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
+          DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
+          BP_RANK_GID: ${{ secrets.BP_RANK_GID }}
+
+          ROSTER_PATH: roster.csv
+          RUN_MODE: ${{ inputs.run_mode }}
+          IS_SCHEDULED: "0"
+        run: |
+          echo "RUN_MODE=${RUN_MODE}"
+          python -u agent.py
+
+      # ------------------------
+      # Scheduled daily run
+      # ------------------------
       - name: Run daily (scheduled)
         if: github.event_name == 'schedule'
-env:
-  EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
-  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-  RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-  GSHEET_ID: ${{ secrets.GSHEET_ID }}
-  ROSTER_GID: ${{ secrets.ROSTER_GID }}
-  AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
-  DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
-  ROSTER_PATH: roster.csv
-  RUN_MODE: daily
-  IS_SCHEDULED: "1"
+        env:
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+
+          GSHEET_ID: ${{ secrets.GSHEET_ID }}
+          ROSTER_GID: ${{ secrets.ROSTER_GID }}
+          AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
+          DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
+          BP_RANK_GID: ${{ secrets.BP_RANK_GID }}
+
+          ROSTER_PATH: roster.csv
+          RUN_MODE: daily
+          IS_SCHEDULED: "1"
         run: python -u agent.py
 
+      # ------------------------
+      # Scheduled weekly run
+      # ------------------------
       - name: Run weekly (scheduled)
         if: github.event_name == 'schedule'
-env:
-  EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
-  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-  RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-  GSHEET_ID: ${{ secrets.GSHEET_ID }}
-  ROSTER_GID: ${{ secrets.ROSTER_GID }}
-  AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
-  DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
-  ROSTER_PATH: roster.csv
-  RUN_MODE: daily
-  IS_SCHEDULED: "1"
+        env:
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+
+          GSHEET_ID: ${{ secrets.GSHEET_ID }}
+          ROSTER_GID: ${{ secrets.ROSTER_GID }}
+          AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
+          DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
+          BP_RANK_GID: ${{ secrets.BP_RANK_GID }}
+
+          ROSTER_PATH: roster.csv
+          RUN_MODE: weekly
+          IS_SCHEDULED: "1"
         run: python -u agent.py
 
-      - name: Commit state/logs (if changed)
+      # ------------------------
+      # Commit state updates
+      # ------------------------
+      - name: Commit state updates (if changed)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           mkdir -p state
           touch state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl
+
           git add state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl || true
-          git diff --cached --quiet && echo "No state changes to commit" && exit 0
-          git commit -m "Update agent state"
+
+          git diff --cached --quiet && echo "No state changes" && exit 0
+
+          git commit -m "Update dynasty agent state"
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
