@@ -1787,7 +1787,7 @@ def run_weekly(force=False):
             name_to_id[nm] = pid
     save_state(state)
 
-    roster_pids = [int(name_to_id[nm]) for nm in roster_names if nm in name_to_id]
+   "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
 
     official_news = read_jsonl(WEEKLY_OFFICIAL_PATH)
     reports_news = read_jsonl(WEEKLY_REPORTS_PATH)
@@ -1886,7 +1886,7 @@ def run_weekly(force=False):
             "wRC+": (fg_adv or {}).get("wRC+","") if fg_adv else "",
             "K%": (fg_adv or {}).get("K%","") if fg_adv else "",
             "BB%": (fg_adv or {}).get("BB%","") if fg_adv else "",
-            "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pid else "",
+            "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
         }
 
     hitters_rows = []
@@ -1939,7 +1939,7 @@ def run_weekly(force=False):
             "BB%": (fg_adv or {}).get("BB%","") if fg_adv else "",
             "K/9": "",
             "BB/9": "",
-            "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pid else "",
+            "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
         }
         if milb:
             ip = ss.get("inningsPitched","") if ss else ""
