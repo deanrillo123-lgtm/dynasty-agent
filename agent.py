@@ -1699,11 +1699,11 @@ def compute_prospect_adds(
         except Exception:
             return s
 
-    if "Dynasty Dugout" in out.columns:
+        if "Dynasty Dugout" in out.columns:
         out["Dynasty Dugout"] = out["Dynasty Dugout"].apply(_int_no_decimal)
-    if "Baseball Prospectus" in out.columns:
+        if "Baseball Prospectus" in out.columns:
         out["Baseball Prospectus"] = out["Baseball Prospectus"].apply(_int_no_decimal)
-    return out
+        return out
 
 # =========================
 # Daily email builder
