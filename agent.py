@@ -2060,15 +2060,47 @@ def run_weekly(force=False):
 
     two_start_list = two_start_pitchers_week(roster_df)
 
-    hot_hit_df, hot_sp_df, hot_rp_df = hot_week_tables(
-        roster_info[["player_name","position"]],
-        name_to_id,
-        {**week_hit_mlb, **week_hit_milb},
-        {**week_pit_mlb, **week_pit_milb},
-    )
+hot_hit_df, hot_sp_df, hot_rp_df = hot_week_tables(
+    roster_info[["player_name", "position"]],
+    name_to_id,
+    {**week_hit_mlb, **week_hit_milb},
+    {**week_pit_mlb, **week_pit_milb},
+)
 
-    def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
+def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
     status = build_status_html(name, injury_players, wk or {}, is_pitcher=False)
+
+    return {
+        "Status": status,
+        "Player": name,
+        "Team": team,
+        "Level": level,
+        "Position": pos,
+
+        "W G": (wk or {}).get("gamesPlayed", ""),
+        "W H": (wk or {}).get("hits", ""),
+        "W HR": (wk or {}).get("homeRuns", ""),
+        "W RBI": (wk or {}).get("rbi", ""),
+        "W SB": (wk or {}).get("stolenBases", ""),
+        "W AVG": (wk or {}).get("avg", ""),
+        "W OBP": (wk or {}).get("obp", ""),
+        "W OPS": (wk or {}).get("ops", ""),
+
+        "S G": (ss or {}).get("gamesPlayed", ""),
+        "S H": (ss or {}).get("hits", ""),
+        "S HR": (ss or {}).get("homeRuns", ""),
+        "S RBI": (ss or {}).get("rbi", ""),
+        "S SB": (ss or {}).get("stolenBases", ""),
+        "S AVG": (ss or {}).get("avg", ""),
+        "S OBP": (ss or {}).get("obp", ""),
+        "S OPS": (ss or {}).get("ops", ""),
+
+        "S wRC+": (fg_adv or {}).get("wRC+", "") if fg_adv else "",
+        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
+        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
+
+        "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
+    }
 
     return {
         "Status": status,
