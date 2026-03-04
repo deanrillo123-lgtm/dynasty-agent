@@ -2169,37 +2169,37 @@ def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None)
     def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
         status = build_status_html(name, injury_players, wk or {}, is_pitcher=True)
 
-    # Compute season K/9 and BB/9 for both MLB and MiLB
-    ip_season = (ss or {}).get("inningsPitched", "")
-    so_season = (ss or {}).get("strikeOuts", "")
-    bb_season = (ss or {}).get("baseOnBalls", "")
-    k9v = k9(so_season, ip_season)
-    bb9v = bb9(bb_season, ip_season)
+        # Compute season K/9 and BB/9 for both MLB and MiLB
+        ip_season = (ss or {}).get("inningsPitched", "")
+        so_season = (ss or {}).get("strikeOuts", "")
+        bb_season = (ss or {}).get("baseOnBalls", "")
+        k9v = k9(so_season, ip_season)
+        bb9v = bb9(bb_season, ip_season)
 
-    return {
-        "Status": status,
-        "Pitcher": name,
-        "Team": team,
-        "Level": level,
-        "Position": pos,
+        return {
+            "Status": status,
+            "Pitcher": name,
+            "Team": team,
+            "Level": level,
+            "Position": pos,
 
-        # Week (displayed under "Last Week's Stats")
-        "W GS": (wk or {}).get("gamesStarted", ""),
-        "W IP": (wk or {}).get("inningsPitched", ""),
-        "W ERA": (wk or {}).get("era", ""),
-        "W SO": (wk or {}).get("strikeOuts", ""),
-        "W BB": (wk or {}).get("baseOnBalls", ""),
+            # Week (displayed under "Last Week's Stats")
+            "W GS": (wk or {}).get("gamesStarted", ""),
+            "W IP": (wk or {}).get("inningsPitched", ""),
+            "W ERA": (wk or {}).get("era", ""),
+            "W SO": (wk or {}).get("strikeOuts", ""),
+            "W BB": (wk or {}).get("baseOnBalls", ""),
 
-        # Season (displayed under "2026 Stats")
-        "S Starts": (ss or {}).get("gamesStarted", ""),
-        "S Innings": (ss or {}).get("inningsPitched", ""),
-        "S FIP": (fg_adv or {}).get("FIP", "") if fg_adv else "",
-        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
-        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
-        "S K/9": f"{k9v:.2f}" if k9v is not None else "",
-        "S BB/9": f"{bb9v:.2f}" if bb9v is not None else "",
+            # Season (displayed under "2026 Stats")
+            "S Starts": (ss or {}).get("gamesStarted", ""),
+            "S Innings": (ss or {}).get("inningsPitched", ""),
+            "S FIP": (fg_adv or {}).get("FIP", "") if fg_adv else "",
+            "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
+            "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
+            "S K/9": f"{k9v:.2f}" if k9v is not None else "",
+            "S BB/9": f"{bb9v:.2f}" if bb9v is not None else "",
 
-        "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
+            "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
     }
         if milb:
             ip = ss.get("inningsPitched","") if ss else ""
