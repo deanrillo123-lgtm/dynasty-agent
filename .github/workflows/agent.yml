@@ -3,12 +3,12 @@ name: Dynasty Agent
 on:
   schedule:
     # Daily around 6am Chicago (DST-safe; Python gates to exactly 6am CT)
+    - cron: "0 10 * * *"
     - cron: "0 11 * * *"
-    - cron: "0 12 * * *"
 
     # Weekly around 7am Chicago on Monday (DST-safe; Python gates to Mon 7am CT)
-    - cron: "0 12 * * 1"
-    - cron: "0 13 * * 1"
+    - cron: "0 10 * * 1"
+    - cron: "0 11 * * 1"
 
   workflow_dispatch:
     inputs:
