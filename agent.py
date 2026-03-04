@@ -878,8 +878,17 @@ def compute_opportunity_signals(items: list[dict], lookback_days: int = 14) -> d
 # =========================
 def is_daily_time(state):
     ln = local_now()
-    if ln.hour != 6:
-        return False
+    wd = ln.weekday()  # Mon=0 ... Sun=6
+
+    # On Sun/Wed/Sat send at 6:30
+    if wd in (2, 5, 6):  # Wed, Sat, Sun
+        if not (ln.hour == 6 and ln.minute >= 30):
+            return False
+    else:
+        # All other days send at 6:00
+        if ln.hour != 6:
+            return False
+
     today = ln.strftime("%Y-%m-%d")
     return state.get("last_daily_local_date") != today
 
