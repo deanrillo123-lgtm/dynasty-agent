@@ -3,6 +3,7 @@ import json
 import smtplib
 import re
 import hashlib
+import socket
 from email.message import EmailMessage
 from datetime import datetime, timedelta, date
 from dateutil import tz
@@ -74,6 +75,9 @@ OPPORTUNITY_KEYWORDS = [
 ASIA_HINTS = ["npb", "kbo", "cpbl", "japan", "korea", "taiwan", "nippon"]
 
 MLB_HITTER_POS_ORDER = ["C", "1B", "2B", "SS", "3B", "OF", "DH"]
+
+# IMPORTANT: prevent hangs from feedparser / sockets
+socket.setdefaulttimeout(20)
 
 # =========================
 # Time helpers
@@ -435,10 +439,54 @@ def load_top500_dynasty_rankings() -> pd.DataFrame:
 # =========================
 # MLBAM / team maps
 # =========================
+def scrub_bad_player_cache(state: dict) -> int:
+    """
+    Removes any cached values that are dicts or non-int convertible.
+    Returns number of removed entries.
+    """
+    cache = state.get("player_cache", {}) or {}
+    bad_keys = []
+    for k, v in cache.items():
+        if isinstance(v, dict):
+            bad_keys.append(k)
+        else:
+            try:
+                _ = int(v)
+            except Exception:
+                bad_keys.append(k)
+    for k in bad_keys:
+        cache.pop(k, None)
+    state["player_cache"] = cache
+    return len(bad_keys)
+
 def lookup_mlbam_id(player_name, state):
-    cache = state.get("player_cache", {})
+    """
+    Always returns int MLBAM id or None.
+    Sanitizes cache in case an accidental dict got stored.
+    """
+    cache = state.get("player_cache", {}) or {}
+
     if player_name in cache:
-        return cache[player_name]
+        v = cache[player_name]
+        if isinstance(v, dict):
+            for k in ("id", "personId", "mlbam_id"):
+                if k in v:
+                    try:
+                        pid = int(v[k])
+                        cache[player_name] = pid
+                        state["player_cache"] = cache
+                        return pid
+                    except Exception:
+                        pass
+            cache.pop(player_name, None)
+            state["player_cache"] = cache
+        else:
+            try:
+                return int(v)
+            except Exception:
+                cache.pop(player_name, None)
+                state["player_cache"] = cache
+
     try:
         res = statsapi.lookup_player(player_name)
         if not res:
@@ -556,7 +604,10 @@ def fetch_reports(names, state):
 
     for src in sources:
         try:
-            feed = feedparser.parse(src["url"])
+            # Hard timeout via requests to prevent 30-minute hangs
+            resp = requests.get(src["url"], timeout=20, headers={"User-Agent": "dynasty-agent/1.0"})
+            resp.raise_for_status()
+            feed = feedparser.parse(resp.content)
             entries = getattr(feed, "entries", [])[:120]
         except Exception:
             continue
@@ -614,11 +665,9 @@ def is_opportunity_text(s: str) -> bool:
 
 def opportunity_confidence(title: str) -> str:
     t = (title or "").lower()
-    # HIGH: direct role change signals
     high = ["placed on il", "out for", "suspended", "traded", "called up", "promoted", "moving into rotation", "named the starter", "everyday role"]
     if any(x in t for x in high):
         return "HIGH"
-    # MEDIUM: likely but softer
     med = ["expected to", "in line for", "more playing time", "opening", "vacancy", "replacing", "takes over"]
     if any(x in t for x in med):
         return "MEDIUM"
@@ -1054,40 +1103,31 @@ def exclude_current_year_draft_pick(dd_signed_year, has_pro_evidence: bool, year
             return False
     except Exception:
         return False
-    # If they're truly a current-year draftee and we have no pro evidence, exclude.
     return not has_pro_evidence
 
 # =========================
 # Adds scoring: MLB + urgency
 # =========================
 def compute_waiver_urgency(add_score: float | None, opp_count: int, fills_need: bool, confidence: str) -> tuple[int, str]:
-    """
-    Returns (urgency_1_5, why_line)
-    """
     score = float(add_score or 0.0)
     points = 0.0
 
-    # Add Score tiering
     if score >= 80: points += 3.0
     elif score >= 70: points += 2.2
     elif score >= 60: points += 1.4
     elif score >= 50: points += 0.8
     else: points += 0.3
 
-    # Opportunity mentions
     points += min(3.0, opp_count * 0.9)
 
-    # Positions of need
     if fills_need:
         points += 1.0
 
-    # Confidence
     if confidence == "HIGH":
         points += 0.8
     elif confidence == "MEDIUM":
         points += 0.4
 
-    # Map to 1-5
     if points >= 6.0:
         urg = 5
     elif points >= 4.8:
@@ -1138,7 +1178,6 @@ def compute_major_league_adds(
     if cand.empty:
         return pd.DataFrame()
 
-    # Performance via FanGraphs (MLB only)
     try:
         fg_hit = batting_stats(year)[["Name", "Team", "G", "PA", "HR", "SB", "AVG", "OBP", "SLG", "OPS", "wRC+", "K%", "BB%"]].copy()
     except Exception:
@@ -1155,7 +1194,6 @@ def compute_major_league_adds(
     hitters = out[~out["is_pitcher"]].merge(fg_hit, on="Name", how="left")
     pitchers = out[out["is_pitcher"]].merge(fg_pit, on="Name", how="left")
 
-    # Savant join (best effort)
     def _join_savant(df, sav_df):
         if df.empty or sav_df is None or sav_df.empty:
             return df
@@ -1166,7 +1204,6 @@ def compute_major_league_adds(
             sav = sav.rename(columns={pid_col: "player_id"})
         sav["player_id_num"] = pd.to_numeric(sav.get("player_id"), errors="coerce")
         keep = ["player_id_num"]
-        # keep some typical savant cols if present
         for want in ["xwoba", "xslg", "hard_hit_percent", "barrel_batted_rate", "avg_exit_velocity", "xera", "k_percent", "bb_percent"]:
             if want in cols_lower:
                 sav = sav.rename(columns={cols_lower[want]: want})
@@ -1179,7 +1216,6 @@ def compute_major_league_adds(
     hitters = _join_savant(hitters, savant_bat_df)
     pitchers = _join_savant(pitchers, savant_pit_df)
 
-    # Opportunity signals from recent reports
     opp = compute_opportunity_signals(recent_reports, lookback_days=14)
 
     def opp_count(name: str) -> int:
@@ -1194,10 +1230,7 @@ def compute_major_league_adds(
         parts = []
         for i, n in enumerate(notes[:2]):
             c = conf[i] if i < len(conf) else ""
-            if c:
-                parts.append(f"[{c}] {n}")
-            else:
-                parts.append(n)
+            parts.append(f"[{c}] {n}" if c else n)
         return " | ".join(parts)
 
     def opp_best_conf(name: str) -> str:
@@ -1208,7 +1241,6 @@ def compute_major_league_adds(
         if conf: return conf[0]
         return ""
 
-    # Score components
     def score_hitters(df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
             df["Add Score"] = []
@@ -1240,7 +1272,7 @@ def compute_major_league_adds(
         df["Opportunity Count"] = df["Name"].apply(opp_count)
         df["Opportunity Notes"] = df["Name"].apply(opp_notes)
         df["Opportunity Confidence"] = df["Name"].apply(opp_best_conf)
-        df["Opportunity Bonus"] = (df["Opportunity Count"].clip(upper=4) * 2).astype(float)  # 0..8
+        df["Opportunity Bonus"] = (df["Opportunity Count"].clip(upper=4) * 2).astype(float)
         df["Add Score"] = (rank_score + perf_score + sav_score + df["Opportunity Bonus"]).round(1)
         return df
 
@@ -1287,7 +1319,7 @@ def compute_major_league_adds(
         df["Opportunity Count"] = df["Name"].apply(opp_count)
         df["Opportunity Notes"] = df["Name"].apply(opp_notes)
         df["Opportunity Confidence"] = df["Name"].apply(opp_best_conf)
-        df["Opportunity Bonus"] = (df["Opportunity Count"].clip(upper=4) * 2).astype(float)  # 0..8
+        df["Opportunity Bonus"] = (df["Opportunity Count"].clip(upper=4) * 2).astype(float)
         df["Add Score"] = (rank_score + perf_score + sav_score + df["Opportunity Bonus"]).round(1)
         return df
 
@@ -1298,7 +1330,6 @@ def compute_major_league_adds(
     scored["primary_pos"] = scored["Position"].apply(lambda x: _first_pos_for_sort(str(x)))
     scored["Savant"] = scored["pid_int"].apply(lambda x: button(baseball_savant_url(int(x)), "Savant", bg="#0b8043") if pd.notna(x) else "")
 
-    # Positions-of-need guarantee
     used = set()
     forced_rows = []
     scored_sorted = scored.sort_values("Add Score", ascending=False)
@@ -1314,7 +1345,6 @@ def compute_major_league_adds(
     rest = scored_sorted[~scored_sorted["Name"].isin(used)]
     final = pd.concat([forced_df, rest], ignore_index=True).head(10).copy()
 
-    # Urgency
     final["Fills Need"] = final["primary_pos"].apply(lambda p: p in (positions_of_need or []))
     urg_list = []
     why_list = []
@@ -1336,7 +1366,7 @@ def compute_major_league_adds(
     return display
 
 # =========================
-# Prospect adds + urgency (tuned)
+# Prospect adds (kept from prior version; still uses DD/BP weights)
 # =========================
 def compute_prospect_adds(
     available_df: pd.DataFrame,
@@ -1364,10 +1394,8 @@ def compute_prospect_adds(
     cand["pid_int"] = pd.to_numeric(cand.get("pid"), errors="coerce")
     cand["Level"] = cand["pid"].apply(lambda x: infer_player_level(int(x), year) if pd.notna(x) else "")
 
-    # filters: asia
     cand = cand[~cand.apply(lambda r: looks_like_asia(str(r.get("team_abbrev","")), str(r.get("Level",""))), axis=1)].copy()
 
-    # exclude current-year draftees (keep intl signings with evidence)
     def is_draft_pick(row):
         sy = row.get("signed_year", None)
         has_pro = bool(row.get("pid")) or bool(str(row.get("Level","")).strip())
@@ -1375,12 +1403,10 @@ def compute_prospect_adds(
 
     cand = cand[~cand.apply(is_draft_pick, axis=1)].copy()
 
-    # keep non-MLB only
     cand = cand[~cand["Level"].astype(str).str.upper().str.contains("MLB")].copy()
     if cand.empty:
         return pd.DataFrame()
 
-    # Performance proxy (MiLB season)
     perf_raw = []
     for _, r in cand.iterrows():
         pid = r.get("pid")
@@ -1400,14 +1426,10 @@ def compute_prospect_adds(
                 obp = st.get("obp")
                 avg = st.get("avg")
                 score = hr*1.5 + sb*1.2
-                try:
-                    score += float(obp or 0) * 10
-                except Exception:
-                    pass
-                try:
-                    score += float(avg or 0) * 8
-                except Exception:
-                    pass
+                try: score += float(obp or 0) * 10
+                except Exception: pass
+                try: score += float(avg or 0) * 8
+                except Exception: pass
             else:
                 pit = statsapi.get("stats", {"group": "pitching", "stats": "season", "sportId": 21, "personIds": str(pid)})
                 ps = pit.get("stats", [])[0].get("splits", [])
@@ -1419,10 +1441,8 @@ def compute_prospect_adds(
                     bb = float(st.get("baseOnBalls", 0) or 0)
                     ipf = innings_to_float(ip) or 0.0
                     score = ipf*0.5 + so*0.25 - bb*0.1
-                    try:
-                        score += max(0.0, 8.0 - float(era)) * 2.5
-                    except Exception:
-                        pass
+                    try: score += max(0.0, 8.0 - float(era)) * 2.5
+                    except Exception: pass
         except Exception:
             pass
 
@@ -1436,7 +1456,6 @@ def compute_prospect_adds(
     dd_pct = percentile_score(cand["dd_rank_num"], higher_is_better=False).fillna(0)
     bp_pct = percentile_score(cand["bp_rank_num"], higher_is_better=False).fillna(0)
 
-    # Buzz (7d)
     cutoff = now_utc() - timedelta(days=7)
     mentions = {}
     opp_hits = {}
@@ -1458,10 +1477,8 @@ def compute_prospect_adds(
     cand["opp_7d"] = cand["player_name"].map(opp_hits).fillna(0).astype(int)
     buzz_pct = ((cand["mentions_7d"].clip(upper=5) + cand["opp_7d"].clip(upper=3)) / 8.0).fillna(0)
 
-    # Score: 30/30/30/10
     cand["Add Score"] = (30*dd_pct + 30*bp_pct + 30*cand["perf_pct"] + 10*buzz_pct).round(1)
 
-    # Prospect urgency: prioritize closeness (AAA/AA), buzz, opp hits
     def level_bonus(level: str) -> float:
         L = (level or "").upper()
         if "AAA" in L:
@@ -1635,6 +1652,11 @@ def build_daily_bodies(official_items, starters, reports, opp_alerts, mlb_adds_d
 # =========================
 def run_daily(lookback_hours=None):
     state = load_state()
+    removed = scrub_bad_player_cache(state)
+    if removed:
+        print(f"[cache] scrubbed {removed} bad entries from player_cache")
+        save_state(state)
+
     roster_df = load_roster()
     roster = roster_df["player_name"].tolist()
     year = local_now().year
@@ -1648,10 +1670,12 @@ def run_daily(lookback_hours=None):
             return
 
     since = now_utc() - timedelta(hours=lookback_hours or 24)
+    print(f"[daily] since={since.isoformat()}")
 
-    # Official transactions
     official_items = []
-    for player in roster:
+    for i, player in enumerate(roster):
+        if i % 10 == 0:
+            print(f"[daily] tx progress {i}/{len(roster)}")
         pid = lookup_mlbam_id(player, state)
         if not pid:
             continue
@@ -1660,14 +1684,13 @@ def run_daily(lookback_hours=None):
             official_items.append({"player": player, "desc": t["desc"], "utc": t["utc"]})
             append_jsonl(WEEKLY_OFFICIAL_PATH, {"player": player, **t})
 
-    # News reports
+    print("[daily] starting RSS/news fetch (timeouts enabled)...")
     reports = fetch_reports(roster, state)
     for r in reports:
         append_jsonl(WEEKLY_REPORTS_PATH, r)
 
     starters = todays_starters_for_roster(roster_df)
 
-    # Opportunity alerts for roster players (from reports + official)
     opp_reports = [x for x in reports if is_opportunity_text(x.get("title",""))]
     opp_alerts = []
     for r in opp_reports[:12]:
@@ -1679,7 +1702,6 @@ def run_daily(lookback_hours=None):
             "link": r.get("link",""),
         })
 
-    # MLB Adds section on Sun/Wed/Sat mornings (and also in manual runs if desired)
     mlb_adds_df = pd.DataFrame()
     include_adds = (os.getenv("IS_SCHEDULED", "0") == "1" and should_include_midweek_adds_now()) or (os.getenv("RUN_MODE","") == "daily_realnews_test")
     if include_adds:
@@ -1696,7 +1718,6 @@ def run_daily(lookback_hours=None):
 
     print(f"[daily] official_items={len(official_items)} reports_items={len(reports)} starters={len(starters)} opp_alerts={len(opp_alerts)} adds_rows={len(mlb_adds_df) if mlb_adds_df is not None else 0}")
 
-    # Quiet mode: nothing -> no email
     any_adds = mlb_adds_df is not None and not mlb_adds_df.empty
     if not official_items and not reports and not starters and not any_adds and not opp_alerts:
         if os.getenv("IS_SCHEDULED", "0") == "1":
@@ -1732,10 +1753,15 @@ def mark_weekly_sent(state):
     state["last_weekly_local_date"] = local_now().strftime("%Y-%m-%d")
 
 # =========================
-# Weekly runner (structure + merged stats tables)
+# Weekly runner
 # =========================
 def run_weekly(force=False):
     state = load_state()
+    removed = scrub_bad_player_cache(state)
+    if removed:
+        print(f"[cache] scrubbed {removed} bad entries from player_cache")
+        save_state(state)
+
     now_local = local_now()
     year = now_local.year
 
@@ -1754,7 +1780,6 @@ def run_weekly(force=False):
     roster_df["position"] = roster_df.get("position","").fillna("").astype(str)
     roster_names = roster_df["player_name"].tolist()
 
-    # ids
     name_to_id = {}
     for nm in roster_names:
         pid = lookup_mlbam_id(nm, state)
@@ -1764,14 +1789,11 @@ def run_weekly(force=False):
 
     roster_pids = [int(name_to_id[nm]) for nm in roster_names if nm in name_to_id]
 
-    # logs accumulated
     official_news = read_jsonl(WEEKLY_OFFICIAL_PATH)
     reports_news = read_jsonl(WEEKLY_REPORTS_PATH)
 
-    # windows
     w_start, w_end = previous_monday_sunday_window(now_local)
 
-    # stats
     week_hit_mlb = fetch_statsapi_by_date_range("hitting", SPORT_ID_MLB, roster_pids, w_start, w_end)
     week_pit_mlb = fetch_statsapi_by_date_range("pitching", SPORT_ID_MLB, roster_pids, w_start, w_end)
     week_hit_milb = fetch_statsapi_by_date_range("hitting", SPORT_ID_MILB, roster_pids, w_start, w_end)
@@ -1782,7 +1804,6 @@ def run_weekly(force=False):
     season_hit_milb = fetch_statsapi_season("hitting", SPORT_ID_MILB, roster_pids)
     season_pit_milb = fetch_statsapi_season("pitching", SPORT_ID_MILB, roster_pids)
 
-    # FanGraphs overlays (MLB advanced)
     try:
         fg_hit = batting_stats(year)[["Name","Team","G","H","HR","RBI","SB","AVG","OBP","OPS","wRC+","K%","BB%"]].copy()
     except Exception:
@@ -1803,14 +1824,12 @@ def run_weekly(force=False):
         for _, r in fg_pit.iterrows():
             fg_pit_map[str(r.get("Name","")).strip()] = {k: r.get(k,"") for k in ["FIP","K%","BB%"]}
 
-    # roster info base
     roster_info = roster_df.copy()
     roster_info["pid"] = roster_info["player_name"].map(name_to_id)
     roster_info["Level"] = roster_info["pid"].apply(lambda x: infer_player_level(int(x), year) if pd.notna(x) and x else "")
     roster_info["is_pitcher"] = roster_info["position"].apply(is_pitcher_position)
     roster_info["is_mlb"] = roster_info["Level"].astype(str).str.upper().str.contains("MLB")
 
-    # injury watch
     injury_players = set()
     injury_cards = []
     for it in official_news:
@@ -1822,7 +1841,6 @@ def run_weekly(force=False):
             injury_players.add(it["player"])
             injury_cards.append({"player": it["player"], "text": it.get("title",""), "source": it.get("source","Report"), "link": it.get("link","")})
 
-    # opportunities (roster)
     opp_map = compute_opportunity_signals(reports_news, lookback_days=14)
     opp_alerts_weekly = []
     for p, d in opp_map.items():
@@ -1835,10 +1853,8 @@ def run_weekly(force=False):
             })
     opp_alerts_weekly.sort(key=lambda x: ({"HIGH":0,"MEDIUM":1,"LOW":2}.get(x["confidence"], 9), x["player"]))
 
-    # two-start pitchers
     two_start_list = two_start_pitchers_week(roster_df)
 
-    # hot week
     hot_hit_df, hot_sp_df, hot_rp_df = hot_week_tables(
         roster_info[["player_name","position"]],
         name_to_id,
@@ -1846,9 +1862,8 @@ def run_weekly(force=False):
         {**week_pit_mlb, **week_pit_milb},
     )
 
-    # Build merged stats tables (weekly + season in one table each)
     def hitter_row(name, team, level, pos, pid, wk, ss, fg_adv=None):
-        row = {
+        return {
             "Player": name,
             "Team": team,
             "Level": level,
@@ -1873,7 +1888,6 @@ def run_weekly(force=False):
             "BB%": (fg_adv or {}).get("BB%","") if fg_adv else "",
             "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pid else "",
         }
-        return row
 
     hitters_rows = []
     for _, r in roster_info.iterrows():
@@ -1965,7 +1979,6 @@ def run_weekly(force=False):
         pit_mlb = pd.DataFrame()
         pit_milb = pd.DataFrame()
 
-    # Adds sections at bottom
     positions_of_need = parse_positions_of_need_from_roster(roster_df)
     available_df = load_available_players()
     dd_df = load_dynasty_dugout_rankings()
@@ -1977,10 +1990,8 @@ def run_weekly(force=False):
     mlb_adds_df = compute_major_league_adds(available_df, top500_df, sav_bat, sav_pit, reports_news, state, year, positions_of_need)
     prospect_adds_df = compute_prospect_adds(available_df, dd_df, bp_df, reports_news, state, year)
 
-    # Major news (no injury duplicates)
     filtered_reports = [r for r in reports_news if not (r.get("player") in injury_players and is_injury_text(r.get("title","")))]
 
-    # Build weekly email HTML
     subject = f"Dynasty Weekly Report — {now_local.strftime('%b %d, %Y')}"
     text_body = f"Dynasty Weekly Report ({w_start} to {w_end})\n(See HTML version for full formatting.)"
 
@@ -1991,7 +2002,6 @@ def run_weekly(force=False):
     html.append(f"<h2 style='margin:0 0 8px 0;'>Dynasty Weekly Report — {h(now_local.strftime('%b %d, %Y'))}</h2>")
     html.append(f"<div style='color:#666; margin-bottom:6px;'>Stat window: <b>{h(w_start.strftime('%b %d'))} – {h(w_end.strftime('%b %d'))}</b></div>")
 
-    # 1) Transaction Wire
     html.append(section_header("Transaction Wire (Official)", "#0b8043"))
     if not official_news:
         html.append("<div style='color:#666;'>No official transactions logged this week.</div>")
@@ -2002,9 +2012,9 @@ def run_weekly(force=False):
         for p in sorted([x for x in byp.keys() if x]):
             tm = team_by_player.get(p,"")
             pid = name_to_id.get(p)
-            head = f"<img src='{h(mlb_headshot_url(pid))}' width='40' height='40' style='border-radius:999px;' alt=''/>" if pid else ""
+            head = f"<img src='{h(mlb_headshot_url(pid))}' width='40' height='40' style='border-radius:999px;' alt='{h(p)}'/>" if pid else ""
             tid = team_id_from_abbrev(tm, state)
-            logo = f"<img src='{h(mlb_team_logo_url(tid))}' width='22' height='22' style='vertical-align:middle;' alt=''/>" if tid else ""
+            logo = f"<img src='{h(mlb_team_logo_url(tid))}' width='22' height='22' style='vertical-align:middle;' alt='{h(tm)}'/>" if tid else ""
             hdr = f"{p} ({tm})" if tm else p
 
             html.append(
@@ -2018,7 +2028,6 @@ def run_weekly(force=False):
                 html.append(f"<li style='margin:6px 0;'>{h(it.get('desc',''))}</li>")
             html.append("</ul></div>")
 
-    # 2) Injury Watch
     html.append(section_header("Injury Watch", "#d93025"))
     if not injury_cards:
         html.append("<div style='color:#666;'>No injuries detected in logged items this week.</div>")
@@ -2030,7 +2039,7 @@ def run_weekly(force=False):
             tm = team_by_player.get(p,"")
             hdr = f"{p} ({tm})" if tm else p
             pid = name_to_id.get(p)
-            head = f"<img src='{h(mlb_headshot_url(pid))}' width='40' height='40' style='border-radius:999px;' alt=''/>" if pid else ""
+            head = f"<img src='{h(mlb_headshot_url(pid))}' width='40' height='40' style='border-radius:999px;' alt='{h(p)}'/>" if pid else ""
             html.append(
                 "<div style='margin:12px 0; padding:12px 14px; border:1px solid #ffe3e0; background:#fff5f4; border-radius:12px;'>"
                 "<div style='display:flex; gap:10px; align-items:center;'>"
@@ -2047,7 +2056,6 @@ def run_weekly(force=False):
                 )
             html.append("</div>")
 
-    # 3) Two-start pitchers
     html.append(section_header("Two-Start Pitchers (Mon–Sun)", "#1a73e8"))
     if not two_start_list:
         html.append("<div style='color:#666;'>No 2-start probables detected (or probables not posted yet).</div>")
@@ -2058,16 +2066,13 @@ def run_weekly(force=False):
             html.append(f"<li style='margin:6px 0;'><b>{h(t['player'])}</b> — {h(str(t['starts']))} starts. <span style='color:#555'>{h(det)}</span></li>")
         html.append("</ul>")
 
-    # 4) Hot week
     html.append(section_header("Hot Week Performances", "#f9ab00"))
     html.append("<div style='color:#666; margin-bottom:8px;'>Thresholds: HR ≥ 3, SB ≥ 4, OPS ≥ .950; SP: GS≥1 & ERA&lt;1.50; RP: SV+HLD ≥ 3.</div>")
     html.append(render_table_html(hot_hit_df, "Hot Hitters", html_cols=set()))
     html.append(render_table_html(hot_sp_df, "Hot Starters (GS≥1, ERA<1.50)", html_cols=set()))
     html.append(render_table_html(hot_rp_df, "Hot Relievers (SV+HLD≥3)", html_cols=set()))
 
-    # 5) Weekly + Season stats (merged tables)
     html.append(section_header("Weekly and Season Stats", "#1a73e8"))
-
     if not hitters_mlb.empty:
         html.append(render_table_html(hitters_mlb, "MLB Hitters (sorted by position)", html_cols={"Savant"}))
     else:
@@ -2094,7 +2099,6 @@ def run_weekly(force=False):
     else:
         html.append("<div style='color:#666;'>No minor-league pitchers found.</div>")
 
-    # 6) Major news (no injury repeats)
     html.append(section_header("Major News From The Week", "#5f6368"))
     if not filtered_reports:
         html.append("<div style='color:#666;'>No matched reports logged this week.</div>")
@@ -2106,7 +2110,7 @@ def run_weekly(force=False):
             tm = team_by_player.get(p,"")
             hdr = f"{p} ({tm})" if tm else p
             pid = name_to_id.get(p)
-            head = f"<img src='{h(mlb_headshot_url(pid))}' width='40' height='40' style='border-radius:999px;' alt=''/>" if pid else ""
+            head = f"<img src='{h(mlb_headshot_url(pid))}' width='40' height='40' style='border-radius:999px;' alt='{h(p)}'/>" if pid else ""
             html.append(
                 "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
                 "<div style='display:flex; gap:10px; align-items:center;'>"
@@ -2123,7 +2127,6 @@ def run_weekly(force=False):
                 )
             html.append("</div>")
 
-    # 7) Playing time opportunities (roster)
     html.append(section_header("Playing Time Opportunities", "#f9ab00"))
     if not opp_alerts_weekly:
         html.append("<div style='color:#666;'>No opportunity signals detected for rostered players in the past 14 days.</div>")
@@ -2145,14 +2148,12 @@ def run_weekly(force=False):
                 )
             html.append("</div>")
 
-    # 8) MLB Adds
     html.append(section_header("Major League Adds", "#0b8043"))
     if mlb_adds_df is None or mlb_adds_df.empty:
         html.append("<div style='color:#666;'>No MLB add candidates found in available pool (or MLB level couldn’t be detected).</div>")
     else:
         html.append(render_table_html(mlb_adds_df, "Top MLB Adds (Available) — max 10", html_cols={"Savant"}))
 
-    # 9) Prospect Adds
     html.append(section_header("Prospect Adds", "#5f6368"))
     if prospect_adds_df is None or prospect_adds_df.empty:
         html.append("<div style='color:#666;'>No prospect add candidates found in available pool after filters.</div>")
