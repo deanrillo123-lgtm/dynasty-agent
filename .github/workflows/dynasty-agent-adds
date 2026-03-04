@@ -2,8 +2,9 @@ name: Dynasty Agent (Adds Build)
 
 on:
   schedule:
-    # Run every 30 minutes; python also gates by America/Chicago window
+    # Run every 30 minutes; Python gates by America/Chicago time window
     - cron: "*/30 * * * *"
+
   workflow_dispatch:
 
 concurrency:
@@ -14,7 +15,7 @@ permissions:
   contents: write
 
 jobs:
-  run-adds:
+  run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
