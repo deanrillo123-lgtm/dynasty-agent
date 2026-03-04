@@ -1694,33 +1694,36 @@ def compute_prospect_adds(
 
     cand["Urgency"] = urg_vals
 
-out = cand.rename(columns={"player_name": "Name", "team_abbrev": "Team", "position": "Position", "age": "Age"})
-out = out.sort_values("Add Score", ascending=False).head(10).copy()
-out["Savant"] = out["pid_int"].apply(lambda x: button(baseball_savant_url(int(x)), "Savant", bg="#0b8043") if pd.notna(x) else "")
-out = out[["Name", "Team", "Level", "Age", "Position", "dd_rank", "bp_rank", "Add Score", "Urgency", "Savant", "mentions_7d", "opp_7d"]]
-out = out.rename(columns={
-    "dd_rank": "Dynasty Dugout",
-    "bp_rank": "Baseball Prospectus",
-    "mentions_7d": "Mentions (7d)",
-    "opp_7d": "Opp Hits (7d)",
-})
+    out = cand.rename(columns={"player_name": "Name", "team_abbrev": "Team", "position": "Position", "age": "Age"})
+    out = out.sort_values("Add Score", ascending=False).head(10).copy()
+    out["Savant"] = out["pid_int"].apply(
+        lambda x: button(baseball_savant_url(int(x)), "Savant", bg="#0b8043") if pd.notna(x) else ""
+    )
+    out = out[["Name", "Team", "Level", "Age", "Position", "dd_rank", "bp_rank", "Add Score", "Urgency", "Savant", "mentions_7d", "opp_7d"]]
 
-def _int_no_decimal(x):
-    s = str(x or "").strip()
-    if not s:
-        return ""
-    try:
-        return str(int(float(s)))
-    except Exception:
-        return s
+    out = out.rename(columns={
+        "dd_rank": "Dynasty Dugout",
+        "bp_rank": "Baseball Prospectus",
+        "mentions_7d": "Mentions (7d)",
+        "opp_7d": "Opp Hits (7d)"
+    })
 
-if "Dynasty Dugout" in out.columns:
-    out["Dynasty Dugout"] = out["Dynasty Dugout"].apply(_int_no_decimal)
+    def _int_no_decimal(x):
+        s = str(x or "").strip()
+        if not s:
+            return ""
+        try:
+            return str(int(float(s)))
+        except Exception:
+            return s
 
-if "Baseball Prospectus" in out.columns:
-    out["Baseball Prospectus"] = out["Baseball Prospectus"].apply(_int_no_decimal)
+    if "Dynasty Dugout" in out.columns:
+        out["Dynasty Dugout"] = out["Dynasty Dugout"].apply(_int_no_decimal)
 
-return out, next_index, done
+    if "Baseball Prospectus" in out.columns:
+        out["Baseball Prospectus"] = out["Baseball Prospectus"].apply(_int_no_decimal)
+
+    return out, next_index, done
 
 # =========================
 # Daily email builder
