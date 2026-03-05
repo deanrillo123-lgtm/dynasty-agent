@@ -585,11 +585,11 @@
   "cache_files": {
     "savant_batter_2026": {
       "path": "state/savant_batter_2026.csv",
-      "fetched_utc": "2026-03-05T18:09:14.824699+00:00"
+      "fetched_utc": "2026-03-05T18:46:12.675741+00:00"
     },
     "savant_pitcher_2026": {
       "path": "state/savant_pitcher_2026.csv",
-      "fetched_utc": "2026-03-05T18:09:14.991739+00:00"
+      "fetched_utc": "2026-03-05T18:46:12.826112+00:00"
     }
   },
   "last_daily_local_date": "2026-03-05",
