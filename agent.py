@@ -2445,7 +2445,9 @@ def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None)
     html.append("</body></html>")
     html_body = "".join(html)
 
+    print(f"[weekly] about to send email: subject={subject} to={RECIPIENT} from={SENDER}")
     send_email(subject, text_body, html_body)
+    print("[weekly] send_email() returned (no exception)")
 
     if os.getenv("IS_SCHEDULED","0") == "1":
         mark_weekly_sent(state)
