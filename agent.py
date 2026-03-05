@@ -1983,6 +1983,9 @@ def mark_weekly_sent(state):
 # Weekly runner
 # =========================
 def run_weekly(force=False):
+    print("[weekly] ENTER run_weekly")
+    print("[weekly] force=", force, "RUN_MODE=", os.getenv("RUN_MODE",""), "IS_SCHEDULED=", os.getenv("IS_SCHEDULED",""))
+
     state = load_state()
     removed = scrub_bad_player_cache(state)
     if removed:
@@ -2449,7 +2452,7 @@ def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None)
     send_email(subject, text_body, html_body)
     print("[weekly] send_email() returned (no exception)")
 
-    if os.getenv("IS_SCHEDULED","0") == "1":
+    if os.getenv("IS_SCHEDULED", "0") == "1":
         mark_weekly_sent(state)
     save_state(state)
 
