@@ -786,7 +786,7 @@ def fetch_reports(names, state):
         except Exception:
             continue
 
-                for e in entries:
+        for e in entries:
             title = _normalize(getattr(e, "title", ""))
             link = _normalize(getattr(e, "link", "")) or _normalize(getattr(e, "id", ""))
             summary = _normalize(getattr(e, "summary", "")) if hasattr(e, "summary") else ""
