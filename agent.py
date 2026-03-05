@@ -108,6 +108,7 @@ def ensure_state_files():
         if not os.path.exists(p):
             with open(p, "w", encoding="utf-8") as f:
                 f.write("")
+
 def _stat_int(x):
     try:
         if x is None or x == "":
@@ -200,7 +201,7 @@ def build_status_html(player_name: str, injury_players: set, wk: dict, is_pitche
             parts.append("🧊")
 
     return "".join(parts)
-    
+
 def load_state():
     ensure_state_files()
     with open(STATE_PATH, "r", encoding="utf-8") as f:
@@ -275,6 +276,7 @@ def button(url: str, label: str, bg: str = "#1a73e8") -> str:
         f"background:{bg}; color:#fff; text-decoration:none; font-size:13px; font-weight:600;'>"
         f"{h(label)}</a>"
     )
+
 def render_table_html(df: pd.DataFrame, title: str, html_cols=None) -> str:
     """
     Renders a table with:
@@ -389,7 +391,6 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols=None) -> str:
 
     out.append("</tbody></table></div>")
     return "".join(out)
-
 
 # =========================
 # URLs
@@ -1454,13 +1455,13 @@ def compute_major_league_adds(
         rank_score = 15 * rank_pct
 
         wrc = pd.to_numeric(df.get("wRC+"), errors="coerce")
-        ops = pd.to_numeric(df.get("OPS"), errors="coerce")
+        opsv = pd.to_numeric(df.get("OPS"), errors="coerce")
         hr = pd.to_numeric(df.get("HR"), errors="coerce")
         sb = pd.to_numeric(df.get("SB"), errors="coerce")
 
         perf_score = 60 * (
             0.45 * percentile_score(wrc, True).fillna(0) +
-            0.25 * percentile_score(ops, True).fillna(0) +
+            0.25 * percentile_score(opsv, True).fillna(0) +
             0.20 * percentile_score(hr, True).fillna(0) +
             0.10 * percentile_score(sb, True).fillna(0)
         )
@@ -1743,7 +1744,7 @@ def compute_prospect_adds(
     if "Baseball Prospectus" in out.columns:
         out["Baseball Prospectus"] = out["Baseball Prospectus"].apply(_int_no_decimal)
 
-    return out, next_index, done
+    return out
 
 # =========================
 # Daily email builder
@@ -1980,6 +1981,82 @@ def mark_weekly_sent(state):
     state["last_weekly_local_date"] = local_now().strftime("%Y-%m-%d")
 
 # =========================
+# Weekly row helpers (moved OUTSIDE run_weekly, fixes indentation)
+# =========================
+def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
+    status = build_status_html(name, injury_players, wk or {}, is_pitcher=False)
+    return {
+        "Status": status,
+        "Player": name,
+        "Team": team,
+        "Level": level,
+        "Position": pos,
+
+        # Week (displayed under "Last Week's Stats")
+        "W G": (wk or {}).get("gamesPlayed", ""),
+        "W H": (wk or {}).get("hits", ""),
+        "W HR": (wk or {}).get("homeRuns", ""),
+        "W RBI": (wk or {}).get("rbi", ""),
+        "W SB": (wk or {}).get("stolenBases", ""),
+        "W AVG": (wk or {}).get("avg", ""),
+        "W OBP": (wk or {}).get("obp", ""),
+        "W OPS": (wk or {}).get("ops", ""),
+
+        # Season (displayed under "YYYY Stats")
+        "S G": (ss or {}).get("gamesPlayed", ""),
+        "S H": (ss or {}).get("hits", ""),
+        "S HR": (ss or {}).get("homeRuns", ""),
+        "S RBI": (ss or {}).get("rbi", ""),
+        "S SB": (ss or {}).get("stolenBases", ""),
+        "S AVG": (ss or {}).get("avg", ""),
+        "S OBP": (ss or {}).get("obp", ""),
+        "S OPS": (ss or {}).get("ops", ""),
+
+        # FG advanced (MLB only; included in Season group area)
+        "S wRC+": (fg_adv or {}).get("wRC+", "") if fg_adv else "",
+        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
+        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
+
+        "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
+    }
+
+def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
+    status = build_status_html(name, injury_players, wk or {}, is_pitcher=True)
+
+    # Season K/9 and BB/9 for MLB or MiLB based on ss
+    ip_season = (ss or {}).get("inningsPitched", "")
+    so_season = (ss or {}).get("strikeOuts", "")
+    bb_season = (ss or {}).get("baseOnBalls", "")
+    k9v = k9(so_season, ip_season)
+    bb9v = bb9(bb_season, ip_season)
+
+    return {
+        "Status": status,
+        "Pitcher": name,
+        "Team": team,
+        "Level": level,
+        "Position": pos,
+
+        # Week (displayed under "Last Week's Stats")
+        "W GS": (wk or {}).get("gamesStarted", ""),
+        "W IP": (wk or {}).get("inningsPitched", ""),
+        "W ERA": (wk or {}).get("era", ""),
+        "W SO": (wk or {}).get("strikeOuts", ""),
+        "W BB": (wk or {}).get("baseOnBalls", ""),
+
+        # Season (displayed under "YYYY Stats")
+        "S Starts": (ss or {}).get("gamesStarted", ""),
+        "S Innings": (ss or {}).get("inningsPitched", ""),
+        "S FIP": (fg_adv or {}).get("FIP", "") if fg_adv else "",
+        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
+        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
+        "S K/9": f"{k9v:.2f}" if k9v is not None else "",
+        "S BB/9": f"{bb9v:.2f}" if bb9v is not None else "",
+
+        "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
+    }
+
+# =========================
 # Weekly runner
 # =========================
 def run_weekly(force=False):
@@ -2009,7 +2086,7 @@ def run_weekly(force=False):
     roster_df = load_roster()
     roster_df["position"] = roster_df.get("position","").fillna("").astype(str)
     roster_names = roster_df["player_name"].tolist()
-    
+
     name_to_id = {}
     for nm in roster_names:
         pid = lookup_mlbam_id(nm, state)
@@ -2020,7 +2097,6 @@ def run_weekly(force=False):
     roster_pids = [int(x) for x in name_to_id.values() if x]
 
     official_news = read_jsonl(WEEKLY_OFFICIAL_PATH)
-  
     reports_news = read_jsonl(WEEKLY_REPORTS_PATH)
 
     w_start, w_end = previous_monday_sunday_window(now_local)
@@ -2093,76 +2169,7 @@ def run_weekly(force=False):
         {**week_pit_mlb, **week_pit_milb},
     )
 
-def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
-    status = build_status_html(name, injury_players, wk or {}, is_pitcher=False)
-
-    return {
-        "Status": status,
-        "Player": name,
-        "Team": team,
-        "Level": level,
-        "Position": pos,
-
-        "W G": (wk or {}).get("gamesPlayed", ""),
-        "W H": (wk or {}).get("hits", ""),
-        "W HR": (wk or {}).get("homeRuns", ""),
-        "W RBI": (wk or {}).get("rbi", ""),
-        "W SB": (wk or {}).get("stolenBases", ""),
-        "W AVG": (wk or {}).get("avg", ""),
-        "W OBP": (wk or {}).get("obp", ""),
-        "W OPS": (wk or {}).get("ops", ""),
-
-        "S G": (ss or {}).get("gamesPlayed", ""),
-        "S H": (ss or {}).get("hits", ""),
-        "S HR": (ss or {}).get("homeRuns", ""),
-        "S RBI": (ss or {}).get("rbi", ""),
-        "S SB": (ss or {}).get("stolenBases", ""),
-        "S AVG": (ss or {}).get("avg", ""),
-        "S OBP": (ss or {}).get("obp", ""),
-        "S OPS": (ss or {}).get("ops", ""),
-
-        "S wRC+": (fg_adv or {}).get("wRC+", "") if fg_adv else "",
-        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
-        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
-
-        "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
-    }
-
-    return {
-        "Status": status,
-        "Player": name,
-        "Team": team,
-        "Level": level,
-        "Position": pos,
-
-        # Week (displayed under "Last Week's Stats")
-        "W G": (wk or {}).get("gamesPlayed", ""),
-        "W H": (wk or {}).get("hits", ""),
-        "W HR": (wk or {}).get("homeRuns", ""),
-        "W RBI": (wk or {}).get("rbi", ""),
-        "W SB": (wk or {}).get("stolenBases", ""),
-        "W AVG": (wk or {}).get("avg", ""),
-        "W OBP": (wk or {}).get("obp", ""),
-        "W OPS": (wk or {}).get("ops", ""),
-
-        # Season (displayed under "2026 Stats")
-        "S G": (ss or {}).get("gamesPlayed", ""),
-        "S H": (ss or {}).get("hits", ""),
-        "S HR": (ss or {}).get("homeRuns", ""),
-        "S RBI": (ss or {}).get("rbi", ""),
-        "S SB": (ss or {}).get("stolenBases", ""),
-        "S AVG": (ss or {}).get("avg", ""),
-        "S OBP": (ss or {}).get("obp", ""),
-        "S OPS": (ss or {}).get("ops", ""),
-
-        # FG advanced (MLB only; included in Season group area)
-        "S wRC+": (fg_adv or {}).get("wRC+", "") if fg_adv else "",
-        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
-        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
-
-        "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
-    }
-
+    # --- Build hitters tables ---
     hitters_rows = []
     for _, r in roster_info.iterrows():
         if r["is_pitcher"]:
@@ -2192,51 +2199,7 @@ def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None)
         hitters_mlb = pd.DataFrame()
         hitters_milb = pd.DataFrame()
 
-    def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None):
-        status = build_status_html(name, injury_players, wk or {}, is_pitcher=True)
-
-        # Compute season K/9 and BB/9 for both MLB and MiLB
-        ip_season = (ss or {}).get("inningsPitched", "")
-        so_season = (ss or {}).get("strikeOuts", "")
-        bb_season = (ss or {}).get("baseOnBalls", "")
-        k9v = k9(so_season, ip_season)
-        bb9v = bb9(bb_season, ip_season)
-
-        return {
-            "Status": status,
-            "Pitcher": name,
-            "Team": team,
-            "Level": level,
-            "Position": pos,
-
-            # Week (displayed under "Last Week's Stats")
-            "W GS": (wk or {}).get("gamesStarted", ""),
-            "W IP": (wk or {}).get("inningsPitched", ""),
-            "W ERA": (wk or {}).get("era", ""),
-            "W SO": (wk or {}).get("strikeOuts", ""),
-            "W BB": (wk or {}).get("baseOnBalls", ""),
-
-            # Season (displayed under "2026 Stats")
-            "S Starts": (ss or {}).get("gamesStarted", ""),
-            "S Innings": (ss or {}).get("inningsPitched", ""),
-            "S FIP": (fg_adv or {}).get("FIP", "") if fg_adv else "",
-            "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
-            "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
-            "S K/9": f"{k9v:.2f}" if k9v is not None else "",
-            "S BB/9": f"{bb9v:.2f}" if bb9v is not None else "",
-
-            "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
-    }
-        if milb:
-            ip = ss.get("inningsPitched","") if ss else ""
-            so = ss.get("strikeOuts","") if ss else ""
-            bb = ss.get("baseOnBalls","") if ss else ""
-            k9v = k9(so, ip)
-            bb9v = bb9(bb, ip)
-            row["K/9"] = f"{k9v:.2f}" if k9v is not None else ""
-            row["BB/9"] = f"{bb9v:.2f}" if bb9v is not None else ""
-        return row
-
+    # --- Build pitchers tables ---
     pitchers_rows = []
     for _, r in roster_info.iterrows():
         if not r["is_pitcher"]:
@@ -2437,7 +2400,7 @@ def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None)
     if mlb_adds_df is None or mlb_adds_df.empty:
         html.append("<div style='color:#666;'>No MLB add candidates found in available pool (or MLB level couldn’t be detected).</div>")
     else:
-        html.append(render_table_html(mlb_adds_df, "Top MLB Adds (Available) — max 10", html_cols={"Status", "Savant"}))
+        html.append(render_table_html(mlb_adds_df, "Top MLB Adds (Available) — max 10", html_cols={"Savant"}))
 
     html.append(section_header("Prospect Adds", "#5f6368"))
     if prospect_adds_df is None or prospect_adds_df.empty:
