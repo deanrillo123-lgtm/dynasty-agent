@@ -89,6 +89,12 @@ MLB_HITTER_POS_ORDER = ["C", "1B", "2B", "SS", "3B", "OF", "DH"]
 # IMPORTANT: prevent hangs from feedparser / sockets
 socket.setdefaulttimeout(20)
 
+# =========================
+# Spring Training Config
+# =========================
+SPRING_GAME_TYPE = "S"  # StatsAPI gameType for Spring Training (preseason)
+SPRING_TRAINING_MONTHS = {2, 3, 4}  # Feb–Apr (some games can spill early April)
+
 
 # =========================
 # Time helpers
@@ -1260,6 +1266,41 @@ def bb9(bb: Any, ip: Any) -> Optional[float]:
 
 
 # =========================
+# MiLB K% / BB% helpers (NEW)
+# =========================
+def pct_str(num, den, digits: int = 1) -> str:
+    try:
+        n = float(num or 0)
+        d = float(den or 0)
+        if d <= 0:
+            return ""
+        return f"{(n / d) * 100:.{digits}f}%"
+    except Exception:
+        return ""
+
+
+def milb_season_kbb_strings(stat: dict, is_pitcher: bool) -> tuple[str, str]:
+    """
+    Returns (K%, BB%) as strings for MiLB season stats (sportId=21).
+    Hitters: SO/PA, BB/PA
+    Pitchers: SO/BF, BB/BF
+    """
+    if not stat:
+        return "", ""
+
+    if is_pitcher:
+        k = stat.get("strikeOuts")
+        bb = stat.get("baseOnBalls")
+        bf = stat.get("battersFaced")
+        return pct_str(k, bf, digits=1), pct_str(bb, bf, digits=1)
+
+    k = stat.get("strikeOuts")
+    bb = stat.get("baseOnBalls")
+    pa = stat.get("plateAppearances")
+    return pct_str(k, pa, digits=1), pct_str(bb, pa, digits=1)
+
+
+# =========================
 # StatsAPI batch queries
 # =========================
 def _chunks(lst: List[int], n: int):
@@ -1530,7 +1571,6 @@ def compute_waiver_urgency(add_score: Optional[float], opp_count: int, fills_nee
     return urg, why
 
 
-# (Everything below is your same logic, with only minimal edits for typing/compat)
 # =========================
 # Major league adds
 # =========================
@@ -1751,14 +1791,14 @@ def compute_major_league_adds(
 
 
 # =========================
-# Prospect adds (your logic)
+# Prospect adds (REPLACED: includes K% + BB%)
 # =========================
 def compute_prospect_adds(
     available_df: pd.DataFrame,
     dd_df: pd.DataFrame,
     bp_df: pd.DataFrame,
-    recent_reports: List[Dict[str, Any]],
-    state: Dict[str, Any],
+    recent_reports: list[dict],
+    state: dict,
     year: int
 ) -> pd.DataFrame:
     if available_df is None or available_df.empty:
@@ -1770,76 +1810,125 @@ def compute_prospect_adds(
     if bp_df is not None and not bp_df.empty:
         cand = cand.merge(bp_df[["player_name", "bp_rank"]], on="player_name", how="left")
 
-    name_to_id: Dict[str, int] = {}
+    # MLBAM ids
+    name_to_id = {}
     for nm in cand["player_name"].tolist():
         pid = lookup_mlbam_id(nm, state)
         if pid:
             name_to_id[nm] = pid
     cand["pid"] = cand["player_name"].map(name_to_id)
     cand["pid_int"] = pd.to_numeric(cand.get("pid"), errors="coerce")
+
     cand["Level"] = cand["pid"].apply(lambda x: infer_player_level(int(x), year) if pd.notna(x) else "")
 
-    cand = cand[~cand.apply(lambda r: looks_like_asia(str(r.get("team_abbrev", "")), str(r.get("Level", ""))), axis=1)].copy()
+    # Filter out Asia
+    cand = cand[~cand.apply(lambda r: looks_like_asia(str(r.get("team_abbrev","")), str(r.get("Level",""))), axis=1)].copy()
 
-    def is_draft_pick(row: pd.Series) -> bool:
+    # Filter current-year draft picks without pro evidence
+    def is_draft_pick(row):
         sy = row.get("signed_year", None)
-        has_pro = bool(row.get("pid")) or bool(str(row.get("Level", "")).strip())
+        has_pro = bool(row.get("pid")) or bool(str(row.get("Level","")).strip())
         return exclude_current_year_draft_pick(sy, has_pro, year)
 
     cand = cand[~cand.apply(is_draft_pick, axis=1)].copy()
 
+    # Prospects only (not MLB)
     cand = cand[~cand["Level"].astype(str).str.upper().str.contains("MLB")].copy()
     if cand.empty:
         return pd.DataFrame()
 
-    perf_raw: List[float] = []
+    # --- Performance + K% and BB% ---
+    perf_raw = []
+    k_pct_list = []
+    bb_pct_list = []
+
     for _, r in cand.iterrows():
         pid = r.get("pid")
         if pd.isna(pid) or pid is None:
             perf_raw.append(0.0)
+            k_pct_list.append("")
+            bb_pct_list.append("")
             continue
-        pid = int(pid)
 
+        pid = int(pid)
         score = 0.0
+        k_pct = ""
+        bb_pct = ""
+
         try:
             hit = statsapi.get("stats", {"group": "hitting", "stats": "season", "sportId": 21, "personIds": str(pid)})
             splits = hit.get("stats", [])[0].get("splits", [])
             if splits:
-                st = splits[0].get("stat", {})
+                st = splits[0].get("stat", {}) or {}
+
                 hr = float(st.get("homeRuns", 0) or 0)
                 sb = float(st.get("stolenBases", 0) or 0)
                 obp = st.get("obp")
                 avg = st.get("avg")
-                score = hr * 1.5 + sb * 1.2
+
+                pa = st.get("plateAppearances")
+                so = st.get("strikeOuts")
+                bb = st.get("baseOnBalls")
+
                 try:
-                    score += float(obp or 0) * 10
+                    pa_f = float(pa or 0)
                 except Exception:
-                    pass
+                    pa_f = 0.0
                 try:
-                    score += float(avg or 0) * 8
+                    so_f = float(so or 0)
                 except Exception:
-                    pass
+                    so_f = 0.0
+                try:
+                    bb_f = float(bb or 0)
+                except Exception:
+                    bb_f = 0.0
+
+                if pa_f > 0:
+                    k_pct = f"{(so_f/pa_f)*100:.1f}%"
+                    bb_pct = f"{(bb_f/pa_f)*100:.1f}%"
+
+                score = hr*1.5 + sb*1.2
+                try: score += float(obp or 0) * 10
+                except Exception: pass
+                try: score += float(avg or 0) * 8
+                except Exception: pass
+
             else:
                 pit = statsapi.get("stats", {"group": "pitching", "stats": "season", "sportId": 21, "personIds": str(pid)})
                 ps = pit.get("stats", [])[0].get("splits", [])
                 if ps:
-                    st = ps[0].get("stat", {})
+                    st = ps[0].get("stat", {}) or {}
+
                     ip = st.get("inningsPitched")
                     era = st.get("era")
                     so = float(st.get("strikeOuts", 0) or 0)
                     bb = float(st.get("baseOnBalls", 0) or 0)
-                    ipf = innings_to_float(ip) or 0.0
-                    score = ipf * 0.5 + so * 0.25 - bb * 0.1
+                    bf = st.get("battersFaced")
+
                     try:
-                        score += max(0.0, 8.0 - float(era)) * 2.5
+                        bf_f = float(bf or 0)
                     except Exception:
-                        pass
+                        bf_f = 0.0
+                    if bf_f > 0:
+                        k_pct = f"{(so/bf_f)*100:.1f}%"
+                        bb_pct = f"{(bb/bf_f)*100:.1f}%"
+
+                    ipf = innings_to_float(ip) or 0.0
+                    score = ipf*0.5 + so*0.25 - bb*0.1
+                    try: score += max(0.0, 8.0 - float(era)) * 2.5
+                    except Exception: pass
+
         except Exception:
             pass
 
         perf_raw.append(score)
+        k_pct_list.append(k_pct)
+        bb_pct_list.append(bb_pct)
 
     cand["perf_raw"] = perf_raw
+    cand["K%"] = k_pct_list
+    cand["BB%"] = bb_pct_list
+
     cand["perf_pct"] = percentile_score(cand["perf_raw"], True).fillna(0)
 
     cand["dd_rank_num"] = pd.to_numeric(cand.get("dd_rank"), errors="coerce")
@@ -1848,17 +1937,17 @@ def compute_prospect_adds(
     bp_pct = percentile_score(cand["bp_rank_num"], higher_is_better=False).fillna(0)
 
     cutoff = now_utc() - timedelta(days=7)
-    mentions: Dict[str, int] = {}
-    opp_hits: Dict[str, int] = {}
+    mentions = {}
+    opp_hits = {}
     for it in recent_reports:
         try:
-            utc = datetime.fromisoformat(it.get("utc", "").replace("Z", "+00:00"))
+            utc = datetime.fromisoformat(it.get("utc","").replace("Z","+00:00"))
         except Exception:
             continue
         if utc < cutoff:
             continue
         p = it.get("player")
-        title = it.get("title", "") or ""
+        title = it.get("title","") or ""
         if p:
             mentions[p] = mentions.get(p, 0) + 1
             if is_positive_opportunity_text(title):
@@ -1868,7 +1957,7 @@ def compute_prospect_adds(
     cand["opp_7d"] = cand["player_name"].map(opp_hits).fillna(0).astype(int)
     buzz_pct = ((cand["mentions_7d"].clip(upper=5) + cand["opp_7d"].clip(upper=3)) / 8.0).fillna(0)
 
-    cand["Add Score"] = (30 * dd_pct + 30 * bp_pct + 30 * cand["perf_pct"] + 10 * buzz_pct).round(1)
+    cand["Add Score"] = (30*dd_pct + 30*bp_pct + 30*cand["perf_pct"] + 10*buzz_pct).round(1)
 
     def level_bonus(level: str) -> float:
         L = (level or "").upper()
@@ -1880,42 +1969,43 @@ def compute_prospect_adds(
             return 0.4
         return 0.2
 
-    urg_vals: List[int] = []
+    urg_vals = []
     for _, r in cand.iterrows():
         score = float(r.get("Add Score") or 0.0)
         pts = 0.0
-        if score >= 80:
-            pts += 2.7
-        elif score >= 70:
-            pts += 2.0
-        elif score >= 60:
-            pts += 1.3
-        elif score >= 50:
-            pts += 0.7
-        else:
-            pts += 0.3
-        pts += level_bonus(r.get("Level", ""))
+        if score >= 80: pts += 2.7
+        elif score >= 70: pts += 2.0
+        elif score >= 60: pts += 1.3
+        elif score >= 50: pts += 0.7
+        else: pts += 0.3
+        pts += level_bonus(r.get("Level",""))
         pts += min(1.8, int(r.get("opp_7d", 0) or 0) * 0.6)
         pts += min(1.0, int(r.get("mentions_7d", 0) or 0) * 0.15)
 
-        if pts >= 5.4:
-            urg = 5
-        elif pts >= 4.3:
-            urg = 4
-        elif pts >= 3.2:
-            urg = 3
-        elif pts >= 2.2:
-            urg = 2
-        else:
-            urg = 1
+        if pts >= 5.4: urg = 5
+        elif pts >= 4.3: urg = 4
+        elif pts >= 3.2: urg = 3
+        elif pts >= 2.2: urg = 2
+        else: urg = 1
         urg_vals.append(urg)
 
     cand["Urgency"] = urg_vals
 
     out = cand.rename(columns={"player_name": "Name", "team_abbrev": "Team", "position": "Position", "age": "Age"})
     out = out.sort_values("Add Score", ascending=False).head(10).copy()
-    out["Savant"] = out["pid_int"].apply(lambda x: button(baseball_savant_url(int(x)), "Savant", bg="#0b8043") if pd.notna(x) else "")
-    out = out[["Name", "Team", "Level", "Age", "Position", "dd_rank", "bp_rank", "Add Score", "Urgency", "Savant", "mentions_7d", "opp_7d"]]
+
+    out["Savant"] = out["pid_int"].apply(
+        lambda x: button(baseball_savant_url(int(x)), "Savant", bg="#0b8043") if pd.notna(x) else ""
+    )
+
+    # include K% and BB% in the prospect table output
+    out = out[[
+        "Name", "Team", "Level", "Age", "Position",
+        "K%", "BB%",
+        "dd_rank", "bp_rank",
+        "Add Score", "Urgency", "Savant",
+        "mentions_7d", "opp_7d"
+    ]]
 
     out = out.rename(columns={
         "dd_rank": "Dynasty Dugout",
@@ -1924,7 +2014,7 @@ def compute_prospect_adds(
         "opp_7d": "Opp Hits (7d)"
     })
 
-    def _int_no_decimal(x: Any) -> str:
+    def _int_no_decimal(x):
         s = str(x or "").strip()
         if not s:
             return ""
@@ -1935,7 +2025,6 @@ def compute_prospect_adds(
 
     if "Dynasty Dugout" in out.columns:
         out["Dynasty Dugout"] = out["Dynasty Dugout"].apply(_int_no_decimal)
-
     if "Baseball Prospectus" in out.columns:
         out["Baseball Prospectus"] = out["Baseball Prospectus"].apply(_int_no_decimal)
 
@@ -1943,7 +2032,7 @@ def compute_prospect_adds(
 
 
 # =========================
-# Daily email builder
+# Daily email builder (unchanged)
 # =========================
 def build_daily_bodies(
     official_items: List[Dict[str, Any]],
@@ -2082,7 +2171,248 @@ def build_daily_bodies(
 
 
 # =========================
-# Daily runner
+# Spring Training module (NEW)
+# =========================
+def is_spring_training_season(now_local: datetime | None = None) -> bool:
+    """
+    True if we're in typical spring months AND there are Spring Training games recently.
+    Falls back to month window if StatsAPI is flaky.
+    """
+    now_local = now_local or local_now()
+    if now_local.month not in SPRING_TRAINING_MONTHS:
+        return False
+
+    try:
+        yday = (now_local.date() - timedelta(days=1)).strftime("%Y-%m-%d")
+        games = statsapi.schedule(date=yday, sportId=1, gameType=SPRING_GAME_TYPE)
+        return bool(games)
+    except Exception:
+        return True
+
+
+def _boxscore_top_lines(game_pk: int) -> dict:
+    """
+    Pull basic score + a few top hitters/pitchers from boxscore.
+    """
+    out = {
+        "game_pk": game_pk,
+        "away": "",
+        "home": "",
+        "away_score": "",
+        "home_score": "",
+        "status": "",
+        "top_hitters": [],
+        "top_pitchers": [],
+        "link": f"https://www.mlb.com/gameday/{game_pk}",
+    }
+
+    try:
+        bs = statsapi.boxscore_data(game_pk)
+    except Exception:
+        return out
+
+    try:
+        out["away"] = bs.get("teamInfo", {}).get("away", {}).get("name", "") or ""
+        out["home"] = bs.get("teamInfo", {}).get("home", {}).get("name", "") or ""
+    except Exception:
+        pass
+
+    try:
+        ls = bs.get("linescore", {}) or {}
+        out["away_score"] = ls.get("teams", {}).get("away", {}).get("runs", "")
+        out["home_score"] = ls.get("teams", {}).get("home", {}).get("runs", "")
+    except Exception:
+        pass
+
+    try:
+        out["status"] = bs.get("gameBoxInfo", {}).get("status", "") or ""
+    except Exception:
+        pass
+
+    hitters = []
+    for side_key in ("awayBatters", "homeBatters"):
+        for row in (bs.get(side_key, []) or []):
+            nm = row.get("name", "")
+            if not nm:
+                continue
+            ab = row.get("ab", "")
+            h_ = row.get("h", "")
+            rbi = row.get("rbi", "")
+            hr = row.get("hr", "")
+            bb = row.get("bb", "")
+            so = row.get("so", "")
+            sb = row.get("sb", "")
+
+            try:
+                impact = (int(hr or 0) * 5) + (int(rbi or 0) * 2) + int(h_ or 0) + (int(sb or 0) * 2)
+            except Exception:
+                impact = 0
+
+            line = f"{nm}: {ab}-{h_}, HR {hr}, RBI {rbi}, BB {bb}, K {so}, SB {sb}"
+            hitters.append((impact, line))
+
+    hitters.sort(key=lambda x: x[0], reverse=True)
+    out["top_hitters"] = [s for _, s in hitters[:6]]
+
+    pitchers = []
+    for side_key in ("awayPitchers", "homePitchers"):
+        for row in (bs.get(side_key, []) or []):
+            nm = row.get("name", "")
+            if not nm:
+                continue
+            ip = row.get("ip", "")
+            so = row.get("so", "")
+            bb = row.get("bb", "")
+            er = row.get("er", "")
+            h_ = row.get("h", "")
+
+            try:
+                impact = (int(so or 0) * 2) - (int(bb or 0) * 1) - (int(er or 0) * 2)
+            except Exception:
+                impact = 0
+
+            line = f"{nm}: {ip} IP, H {h_}, ER {er}, BB {bb}, K {so}"
+            pitchers.append((impact, line))
+
+    pitchers.sort(key=lambda x: x[0], reverse=True)
+    out["top_pitchers"] = [s for _, s in pitchers[:5]]
+
+    return out
+
+
+def fetch_yesterdays_spring_training_results() -> list[dict]:
+    """
+    Get all spring training games from yesterday + top lines.
+    """
+    yday = (local_now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        games = statsapi.schedule(date=yday, sportId=1, gameType=SPRING_GAME_TYPE)
+    except Exception:
+        games = []
+
+    results = []
+    for g in games:
+        game_pk = g.get("game_id") or g.get("game_pk") or g.get("gamePk")
+        if not game_pk:
+            continue
+        try:
+            game_pk = int(game_pk)
+        except Exception:
+            continue
+
+        details = _boxscore_top_lines(game_pk)
+        details["away_score"] = details["away_score"] if details["away_score"] != "" else g.get("away_score", "")
+        details["home_score"] = details["home_score"] if details["home_score"] != "" else g.get("home_score", "")
+        details["away"] = details["away"] or (g.get("away_name", "") or "")
+        details["home"] = details["home"] or (g.get("home_name", "") or "")
+        details["status"] = details["status"] or (g.get("status", "") or "")
+        details["date"] = yday
+
+        results.append(details)
+
+    def _scored_first(x):
+        try:
+            int(x.get("away_score", ""))
+            int(x.get("home_score", ""))
+            return 0
+        except Exception:
+            return 1
+
+    results.sort(key=lambda x: (_scored_first(x), x.get("home", "")))
+    return results
+
+
+def build_spring_training_allgames_email(results: list[dict]) -> tuple[str, str]:
+    date_str = (local_now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if not results:
+        text = f"Spring Training Recap — {date_str}\n\nNo spring training games found yesterday."
+        html = (
+            "<html><body style='font-family:Arial, Helvetica, sans-serif; color:#111;'>"
+            f"<h2 style='margin:0 0 8px 0;'>Spring Training Recap — {h(date_str)}</h2>"
+            "<div style='color:#666;'>No spring training games found yesterday.</div>"
+            "</body></html>"
+        )
+        return text, html
+
+    text_lines = [f"Spring Training Recap — {date_str}", ""]
+    for r in results:
+        away = r.get("away", "")
+        home = r.get("home", "")
+        ascore = r.get("away_score", "")
+        hscore = r.get("home_score", "")
+        status = r.get("status", "")
+        text_lines.append(f"- {away} {ascore} @ {home} {hscore} ({status})")
+        for s in (r.get("top_hitters") or [])[:4]:
+            text_lines.append(f"    H: {s}")
+        for s in (r.get("top_pitchers") or [])[:3]:
+            text_lines.append(f"    P: {s}")
+        if r.get("link"):
+            text_lines.append(f"    {r['link']}")
+        text_lines.append("")
+
+    text_body = "\n".join(text_lines)
+
+    html = []
+    html.append("<html><body style='font-family:Arial, Helvetica, sans-serif; line-height:1.35; color:#111;'>")
+    html.append(f"<h2 style='margin:0 0 8px 0;'>Spring Training Recap — {h(date_str)}</h2>")
+
+    for r in results:
+        away = r.get("away", "")
+        home = r.get("home", "")
+        ascore = h(str(r.get("away_score", "")))
+        hscore = h(str(r.get("home_score", "")))
+        status = h(str(r.get("status", "")))
+        link = r.get("link", "")
+
+        html.append(
+            "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
+            f"<div style='font-size:16px; margin-bottom:6px;'><b>{h(away)} {ascore} @ {h(home)} {hscore}</b> "
+            f"<span style='color:#666; font-size:13px;'>{status}</span></div>"
+        )
+
+        th = r.get("top_hitters") or []
+        tp = r.get("top_pitchers") or []
+
+        if th:
+            html.append("<div style='margin-top:8px;'><b>Top hitters</b><ul style='margin:6px 0 0 0; padding-left:18px;'>")
+            for s in th[:6]:
+                html.append(f"<li style='margin:4px 0;'>{h(s)}</li>")
+            html.append("</ul></div>")
+
+        if tp:
+            html.append("<div style='margin-top:10px;'><b>Top pitchers</b><ul style='margin:6px 0 0 0; padding-left:18px;'>")
+            for s in tp[:5]:
+                html.append(f"<li style='margin:4px 0;'>{h(s)}</li>")
+            html.append("</ul></div>")
+
+        if link:
+            html.append(f"<div style='margin-top:10px;'>{button(link, 'Game', bg='#1a73e8')}</div>")
+
+        html.append("</div>")
+
+    html.append("</body></html>")
+    return text_body, "".join(html)
+
+
+def run_spring_training_daily_allgames() -> None:
+    """
+    Sends a daily email during spring training with ALL games + top performers.
+    """
+    if not is_spring_training_season(local_now()):
+        print("[spring] Not in spring training window; skipping.")
+        return
+
+    results = fetch_yesterdays_spring_training_results()
+    subj_date = (local_now().date() - timedelta(days=1)).strftime("%b %d")
+    subject = f"Spring Training Recap — {subj_date}"
+
+    text_body, html_body = build_spring_training_allgames_email(results)
+    send_email(subject, text_body, html_body)
+
+
+# =========================
+# Daily runner (unchanged except: optional spring mode in main)
 # =========================
 def run_daily(lookback_hours: Optional[int] = None) -> None:
     state = load_state()
@@ -2193,20 +2523,25 @@ def mark_weekly_sent(state: Dict[str, Any]) -> None:
 
 
 # =========================
-# Weekly row helpers
+# Weekly row helpers (REPLACED: MiLB K%/BB% fallback + DD Rank)
 # =========================
-def hitter_row(
-    name: str, team: str, level: str, pos: str, pid: Any,
-    wk: Optional[Dict[str, Any]], ss: Optional[Dict[str, Any]],
-    injury_players: Set[str], fg_adv: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None, dd_rank=""):
     status = build_status_html(name, injury_players, wk or {}, is_pitcher=False)
+
+    # MLB uses FanGraphs (pybaseball). MiLB fallback uses StatsAPI season totals.
+    if fg_adv:
+        season_k = (fg_adv or {}).get("K%", "") or ""
+        season_bb = (fg_adv or {}).get("BB%", "") or ""
+    else:
+        season_k, season_bb = milb_season_kbb_strings(ss or {}, is_pitcher=False)
+
     return {
         "Status": status,
         "Player": name,
         "Team": team,
         "Level": level,
         "Position": pos,
+        "DD Rank": dd_rank,  # show only for MiLB tables
 
         "W G": (wk or {}).get("gamesPlayed", ""),
         "W H": (wk or {}).get("hits", ""),
@@ -2227,18 +2562,14 @@ def hitter_row(
         "S OPS": (ss or {}).get("ops", ""),
 
         "S wRC+": (fg_adv or {}).get("wRC+", "") if fg_adv else "",
-        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
-        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
+        "S K%": season_k,
+        "S BB%": season_bb,
 
         "Savant": button(baseball_savant_url(int(pid)), "Savant", bg="#0b8043") if pd.notna(pid) else "",
     }
 
 
-def pitcher_row(
-    name: str, team: str, level: str, pos: str, pid: Any,
-    wk: Optional[Dict[str, Any]], ss: Optional[Dict[str, Any]],
-    injury_players: Set[str], fg_adv: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None, dd_rank=""):
     status = build_status_html(name, injury_players, wk or {}, is_pitcher=True)
 
     ip_season = (ss or {}).get("inningsPitched", "")
@@ -2247,12 +2578,22 @@ def pitcher_row(
     k9v = k9(so_season, ip_season)
     bb9v = bb9(bb_season, ip_season)
 
+    # MLB uses FanGraphs (pybaseball). MiLB fallback uses StatsAPI season totals.
+    if fg_adv:
+        season_fip = (fg_adv or {}).get("FIP", "") or ""
+        season_k = (fg_adv or {}).get("K%", "") or ""
+        season_bb = (fg_adv or {}).get("BB%", "") or ""
+    else:
+        season_fip = ""
+        season_k, season_bb = milb_season_kbb_strings(ss or {}, is_pitcher=True)
+
     return {
         "Status": status,
         "Pitcher": name,
         "Team": team,
         "Level": level,
         "Position": pos,
+        "DD Rank": dd_rank,  # show only for MiLB tables
 
         "W GS": (wk or {}).get("gamesStarted", ""),
         "W IP": (wk or {}).get("inningsPitched", ""),
@@ -2262,9 +2603,9 @@ def pitcher_row(
 
         "S Starts": (ss or {}).get("gamesStarted", ""),
         "S Innings": (ss or {}).get("inningsPitched", ""),
-        "S FIP": (fg_adv or {}).get("FIP", "") if fg_adv else "",
-        "S K%": (fg_adv or {}).get("K%", "") if fg_adv else "",
-        "S BB%": (fg_adv or {}).get("BB%", "") if fg_adv else "",
+        "S FIP": season_fip,
+        "S K%": season_k,
+        "S BB%": season_bb,
         "S K/9": f"{k9v:.2f}" if k9v is not None else "",
         "S BB/9": f"{bb9v:.2f}" if bb9v is not None else "",
 
@@ -2273,7 +2614,7 @@ def pitcher_row(
 
 
 # =========================
-# Weekly runner
+# Weekly runner (UPDATED: DD Rank map + MLB/MiLB table columns/splits)
 # =========================
 def run_weekly(force: bool = False) -> None:
     print("[weekly] ENTER run_weekly")
@@ -2353,6 +2694,12 @@ def run_weekly(force: bool = False) -> None:
     roster_info["is_pitcher"] = roster_info["position"].apply(is_pitcher_position)
     roster_info["is_mlb"] = roster_info["Level"].astype(str).str.upper().str.contains("MLB")
 
+    # DD ranks (NEW): map for showing DD Rank in MiLB tables
+    dd_df = load_dynasty_dugout_rankings()
+    dd_rank_map = {}
+    if dd_df is not None and not dd_df.empty:
+        dd_rank_map = dict(zip(dd_df["player_name"].tolist(), dd_df["dd_rank"].tolist()))
+
     injury_players: Set[str] = set()
     injury_cards: List[Dict[str, Any]] = []
     for it in official_news:
@@ -2394,14 +2741,20 @@ def run_weekly(force: bool = False) -> None:
         pid = r.get("pid")
         level = "MLB" if r["is_mlb"] else r.get("Level", "")
 
+        dd_rank = dd_rank_map.get(nm, "")
+
         if r["is_mlb"]:
             wk = week_hit_mlb.get(pid, {}) if pid else {}
             ss = season_hit_mlb.get(pid, {}) if pid else {}
-            hitters_rows.append(hitter_row(nm, tm, "MLB", pos, pid, wk, ss, injury_players, fg_hit_map.get(nm, {})))
+            hitters_rows.append(
+                hitter_row(nm, tm, "MLB", pos, pid, wk, ss, injury_players, fg_hit_map.get(nm, {}), dd_rank="")
+            )
         else:
             wk = week_hit_milb.get(pid, {}) if pid else {}
             ss = season_hit_milb.get(pid, {}) if pid else {}
-            hitters_rows.append(hitter_row(nm, tm, level, pos, pid, wk, ss, injury_players, None))
+            hitters_rows.append(
+                hitter_row(nm, tm, level, pos, pid, wk, ss, injury_players, None, dd_rank=dd_rank)
+            )
 
     hitters_df = pd.DataFrame(hitters_rows)
 
@@ -2409,29 +2762,33 @@ def run_weekly(force: bool = False) -> None:
         hitters_mlb = pd.DataFrame()
         hitters_milb = pd.DataFrame()
     else:
-        hitters_df["is_mlb"] = hitters_df["Level"].astype(str).str.upper().str.contains("MLB")
-        hitters_df["pos_key"] = hitters_df["Position"].apply(_pos_sort_key_mlb)
+        # Column layouts (NEW)
+        hitter_cols_base = ["Status", "Player", "Team", "Level", "Position"]
 
-        hitter_cols = [
-            "Status", "Player", "Team", "Level", "Position",
+        hitter_cols_stats = [
             "W G", "W H", "W HR", "W RBI", "W SB", "W AVG", "W OBP", "W OPS",
             "S G", "S H", "S HR", "S RBI", "S SB", "S AVG", "S OBP", "S OPS",
             "S wRC+", "S K%", "S BB%",
             "Savant"
         ]
-        keep_cols = [c for c in hitter_cols if c in hitters_df.columns]
-        hitters_df = hitters_df[keep_cols + ["is_mlb", "pos_key"]]
+
+        hitter_cols_mlb = hitter_cols_base + hitter_cols_stats
+        hitter_cols_milb = hitter_cols_base + ["DD Rank"] + hitter_cols_stats
+
+        # keep helper cols for sorting/splitting
+        hitters_df["is_mlb"] = hitters_df["Level"].astype(str).str.upper().str.contains("MLB")
+        hitters_df["pos_key"] = hitters_df["Position"].apply(_pos_sort_key_mlb)
 
         hitters_mlb = (
-            hitters_df[hitters_df["is_mlb"]]
+            hitters_df[hitters_df["is_mlb"]][[c for c in hitter_cols_mlb if c in hitters_df.columns] + ["pos_key"]]
             .sort_values(["pos_key", "Player"])
-            .drop(columns=["is_mlb", "pos_key"])
+            .drop(columns=["pos_key"])
             .reset_index(drop=True)
         )
+
         hitters_milb = (
-            hitters_df[~hitters_df["is_mlb"]]
+            hitters_df[~hitters_df["is_mlb"]][[c for c in hitter_cols_milb if c in hitters_df.columns]]
             .sort_values(["Player"])
-            .drop(columns=["is_mlb", "pos_key"])
             .reset_index(drop=True)
         )
 
@@ -2446,38 +2803,47 @@ def run_weekly(force: bool = False) -> None:
         pid = r.get("pid")
         level = "MLB" if r["is_mlb"] else r.get("Level", "")
 
+        dd_rank = dd_rank_map.get(nm, "")
+
         if r["is_mlb"]:
             wk = week_pit_mlb.get(pid, {}) if pid else {}
             ss = season_pit_mlb.get(pid, {}) if pid else {}
-            pitchers_rows.append(pitcher_row(nm, tm, "MLB", pos, pid, wk, ss, injury_players, fg_pit_map.get(nm, {})))
+            pitchers_rows.append(pitcher_row(nm, tm, "MLB", pos, pid, wk, ss, injury_players, fg_pit_map.get(nm, {}), dd_rank=""))
         else:
             wk = week_pit_milb.get(pid, {}) if pid else {}
             ss = season_pit_milb.get(pid, {}) if pid else {}
-            pitchers_rows.append(pitcher_row(nm, tm, level, pos, pid, wk, ss, injury_players, None))
+            pitchers_rows.append(pitcher_row(nm, tm, level, pos, pid, wk, ss, injury_players, None, dd_rank=dd_rank))
 
     pitchers_df = pd.DataFrame(pitchers_rows)
     if not pitchers_df.empty:
-        # FIX: keep is_mlb through filtering; don't drop it before split
         pitchers_df["is_mlb"] = pitchers_df["Level"].astype(str).str.upper().str.contains("MLB")
 
-        pitcher_cols = [
-            "Status", "Pitcher", "Team", "Level", "Position",
+        pitcher_cols_base = ["Status", "Pitcher", "Team", "Level", "Position"]
+        pitcher_cols_stats = [
             "W GS", "W IP", "W ERA", "W SO", "W BB",
             "S Starts", "S Innings", "S FIP", "S K%", "S BB%", "S K/9", "S BB/9",
-            "Savant",
-            "is_mlb",  # keep
+            "Savant"
         ]
-        pitchers_df = pitchers_df[[c for c in pitcher_cols if c in pitchers_df.columns]]
+        pitcher_cols_mlb = pitcher_cols_base + pitcher_cols_stats
+        pitcher_cols_milb = pitcher_cols_base + ["DD Rank"] + pitcher_cols_stats
 
-        pit_mlb = pitchers_df[pitchers_df["is_mlb"]].sort_values(["Pitcher"]).drop(columns=["is_mlb"]).reset_index(drop=True)
-        pit_milb = pitchers_df[~pitchers_df["is_mlb"]].sort_values(["Pitcher"]).drop(columns=["is_mlb"]).reset_index(drop=True)
+        pit_mlb = (
+            pitchers_df[pitchers_df["is_mlb"]][[c for c in pitcher_cols_mlb if c in pitchers_df.columns]]
+            .sort_values(["Pitcher"])
+            .reset_index(drop=True)
+        )
+
+        pit_milb = (
+            pitchers_df[~pitchers_df["is_mlb"]][[c for c in pitcher_cols_milb if c in pitchers_df.columns]]
+            .sort_values(["Pitcher"])
+            .reset_index(drop=True)
+        )
     else:
         pit_mlb = pd.DataFrame()
         pit_milb = pd.DataFrame()
 
     positions_of_need = parse_positions_of_need_from_roster(roster_df)
     available_df = load_available_players()
-    dd_df = load_dynasty_dugout_rankings()
     bp_df = load_baseball_prospectus_rankings()
     top500_df = load_top500_dynasty_rankings()
     sav_bat = fetch_savant_leaderboard(year, "batter", state)
@@ -2684,7 +3050,7 @@ def run_weekly_test() -> None:
 
 
 # =========================
-# Main
+# Main (UPDATED: spring_training_daily mode)
 # =========================
 def main() -> None:
     ensure_state_files()
@@ -2699,6 +3065,8 @@ def main() -> None:
         run_daily_realnews_test()
     elif mode == "weekly_test":
         run_weekly_test()
+    elif mode == "spring_training_daily":
+        run_spring_training_daily_allgames()
     elif mode == "daily":
         run_daily()
     elif mode == "weekly":
