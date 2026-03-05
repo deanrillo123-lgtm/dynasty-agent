@@ -2261,25 +2261,31 @@ def run_weekly(force=False):
             hitters_rows.append(hitter_row(nm, tm, level, pos, pid, wk, ss, injury_players, None))
 
     hitters_df = pd.DataFrame(hitters_rows)
+
     if not hitters_df.empty:
+
+        # ALWAYS recreate helper columns first
         hitters_df["is_mlb"] = hitters_df["Level"].astype(str).str.upper().str.contains("MLB")
         hitters_df["pos_key"] = hitters_df["Position"].apply(_pos_sort_key_mlb)
 
-        # Optional: enforce stable column order (helps keep things consistent)
         hitter_cols = [
             "Status","Player","Team","Level","Position",
             "W G","W H","W HR","W RBI","W SB","W AVG","W OBP","W OPS",
-            "S G","S H","S HR","S RBI","S SB","S AVG","S OBP","S OPS","S wRC+","S K%","S BB%",
+            "S G","S H","S HR","S RBI","S SB","S AVG","S OBP","S OPS",
+            "S wRC+","S K%","S BB%",
             "Savant"
         ]
-        hitters_df = hitters_df[[c for c in hitter_cols if c in hitters_df.columns]]
 
-        hitters_mlb = hitters_df[hitters_df["is_mlb"]].sort_values(["pos_key","Player"]).drop(columns=["is_mlb","pos_key"])
-        hitters_milb = hitters_df[~hitters_df["is_mlb"]].sort_values(["Player"]).drop(columns=["is_mlb","pos_key"])
-    else:
-        hitters_mlb = pd.DataFrame()
-        hitters_milb = pd.DataFrame()
+    # Keep stat columns but DO NOT drop helper columns yet
+    keep_cols = [c for c in hitter_cols if c in hitters_df.columns]
+    hitters_df = hitters_df[keep_cols + ["is_mlb","pos_key"]]
 
+    hitters_mlb = hitters_df[hitters_df["is_mlb"]].sort_values(["pos_key","Player"]).drop(columns=["is_mlb","pos_key"])
+    hitters_milb = hitters_df[~hitters_df["is_mlb"]].sort_values(["Player"]).drop(columns=["is_mlb","pos_key"])
+
+else:
+    hitters_mlb = pd.DataFrame()
+    hitters_milb = pd.DataFrame()
     # --- Build pitchers tables ---
     pitchers_rows = []
     for _, r in roster_info.iterrows():
