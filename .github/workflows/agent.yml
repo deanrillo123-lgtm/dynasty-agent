@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "daily | weekly | smtp_test | news_test | daily_realnews_test | weekly_test"
+        description: "daily | weekly | spring_daily_all | smtp_test | news_test | daily_realnews_test | weekly_test"
         required: true
         default: "smtp_test"
         type: choice
@@ -19,6 +19,7 @@ on:
           - weekly_test
           - daily
           - weekly
+          - spring_daily_all
 
 concurrency:
   group: dynasty-agent-main
@@ -59,16 +60,21 @@ jobs:
           now = datetime.now(tz)
           wd = now.weekday()  # Mon=0 ... Sun=6
 
-          # Daily at 06:00 CT
+          # Daily at 06:00 CT (your script further gates exact minute logic)
           is_daily_time = (now.hour == 6)
 
           # Weekly at Mon 07:00 CT
           is_weekly_time = (wd == 0 and now.hour == 7)
 
+          # Spring Training recap at 08:00 CT (script also gates by season + yesterday games)
+          is_spring_time = (now.hour == 8)
+
           if is_weekly_time:
               mode = "weekly"
           elif is_daily_time:
               mode = "daily"
+          elif is_spring_time:
+              mode = "spring_daily_all"
           else:
               mode = "noop"
 
@@ -111,7 +117,7 @@ jobs:
 
           IS_SCHEDULED: "1"
         run: |
-          MODE=$(cat run_mode.txt || echo "noop")
+          MODE=$(cat run_mode.txt 2>/dev/null || echo "noop")
           if [ "$MODE" = "noop" ]; then
             echo "No scheduled work for this hour."
             exit 0
@@ -123,8 +129,9 @@ jobs:
           timeout 45m python -u agent.py
 
       - name: Commit state/logs (if changed)
+        if: github.event_name == 'schedule'
         run: |
-          MODE=$(cat run_mode.txt 2>/dev/null || echo "manual")
+          MODE=$(cat run_mode.txt 2>/dev/null || echo "noop")
           if [ "$MODE" = "noop" ]; then
             echo "Skipping commit on noop."
             exit 0
@@ -134,9 +141,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           mkdir -p state
-          touch state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl state/adds_cache.json
+          touch state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl
 
-          git add state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl state/adds_cache.json || true
+          git add state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl || true
           git diff --cached --quiet && echo "No state changes to commit" && exit 0
 
           git commit -m "Update agent state"
