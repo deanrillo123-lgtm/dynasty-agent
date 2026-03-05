@@ -918,7 +918,12 @@ def mark_daily_sent(state):
 
 def should_include_midweek_adds_now() -> bool:
     ln = local_now()
-    return ln.hour == 6 and ln.weekday() in MIDWEEK_ADDS_WEEKDAYS
+    wd = ln.weekday()
+    # Match is_daily_time() behavior:
+    if wd in (2, 5, 6):   # Wed, Sat, Sun
+        return ln.hour == 6 and ln.minute >= 30
+    else:
+        return ln.hour == 6
 
 def todays_starters_for_roster(roster_df: pd.DataFrame):
     roster_df = roster_df.copy()
