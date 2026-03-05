@@ -786,11 +786,31 @@ def fetch_reports(names, state):
         except Exception:
             continue
 
-        for e in entries:
+                for e in entries:
             title = _normalize(getattr(e, "title", ""))
             link = _normalize(getattr(e, "link", "")) or _normalize(getattr(e, "id", ""))
             summary = _normalize(getattr(e, "summary", "")) if hasattr(e, "summary") else ""
             blob = f"{title} {summary}"
+
+            # --- Filter: skip non-news/profile/stat pages (common from Google News & MLB) ---
+            title_l = title.lower()
+            link_l = (link or "").lower()
+
+            bad_title_phrases = [
+                "stats, age, position",
+                "fantasy & news",
+                "player page",
+                "roster",
+                "depth chart",
+            ]
+            if any(p in title_l for p in bad_title_phrases):
+                continue
+
+            # MLB player profile URLs often look like /player/<slug>-<id>
+            # Keep only if it's explicitly a news article.
+            if "/player/" in link_l and ("news" not in link_l) and ("article" not in link_l):
+                continue
+            # ---------------------------------------------------------------
 
             cid = _content_id(src["name"], title, link)
             if cid in seen:
