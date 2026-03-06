@@ -1,11 +1,14 @@
+
 import os
 import json
 import smtplib
 import re
 import hashlib
 import socket
+from difflib import SequenceMatcher
 from email.message import EmailMessage
 from datetime import datetime, timedelta, date
+from email.utils import parsedate_to_datetime
 from dateutil import tz
 import pytz
 import pandas as pd
@@ -105,6 +108,13 @@ def local_now() -> datetime:
 
 def now_utc() -> datetime:
     return datetime.now(tz=tz.tzutc())
+
+
+def _parse_iso_utc(utc_s: str) -> datetime:
+    try:
+        return datetime.fromisoformat(str(utc_s).replace("Z", "+00:00"))
+    except Exception:
+        return datetime(1970, 1, 1, tzinfo=tz.tzutc())
 
 
 # =========================
@@ -323,7 +333,6 @@ def send_email(subject: str, text_body: str, html_body: str) -> None:
 # HTML helpers
 # =========================
 def h(s: str) -> str:
-    # FIX: also escape single quotes to avoid breaking attributes like href='...'
     return (
         (s or "")
         .replace("&", "&amp;")
@@ -357,10 +366,11 @@ def button(url: str, label: str, bg: str = "#1a73e8") -> str:
 
 def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]] = None) -> str:
     """
-    FIXED:
-    - Properly supports trailing non-group columns (like Savant) AFTER season cols.
-    - Thick divider ALWAYS between Week group and Season group.
-    - Prevents header misalignment that put Savant buttons under the wrong stat column.
+    Supports:
+    - grouped week/season stat headers
+    - non-group columns before week stats
+    - non-group columns between week and season stats (e.g. Status)
+    - non-group columns after season stats (e.g. Savant)
     """
     html_cols = set(html_cols or [])
     if df is None or df.empty:
@@ -375,24 +385,41 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
     def is_s(c: Any) -> bool:
         return isinstance(c, str) and c.startswith("S ")
 
-    week_cols = [c for c in cols if is_w(c)]
-    season_cols = [c for c in cols if is_s(c)]
+    week_idxs = [i for i, c in enumerate(cols) if is_w(c)]
+    season_idxs = [i for i, c in enumerate(cols) if is_s(c)]
+    week_cols = [cols[i] for i in week_idxs]
+    season_cols = [cols[i] for i in season_idxs]
     has_groups = bool(week_cols or season_cols)
 
     year_label = f"{local_now().year} Stats"
     week_label = "Last Week's Stats"
     divider_css = "border-left:4px solid #111;"
 
-    group_idxs = [i for i, c in enumerate(cols) if is_w(c) or is_s(c)]
-    if has_groups and group_idxs:
-        g_start = min(group_idxs)
-        g_end = max(group_idxs)
-        pre_cols = [c for i, c in enumerate(cols) if i < g_start and not (is_w(c) or is_s(c))]
-        post_cols = [c for i, c in enumerate(cols) if i > g_end and not (is_w(c) or is_s(c))]
-    else:
-        pre_cols, post_cols = [c for c in cols if not (is_w(c) or is_s(c))], []
+    first_season_idx = season_idxs[0] if season_idxs else None
 
-    first_season_idx = cols.index(season_cols[0]) if season_cols else None
+    pre_cols: List[str] = []
+    mid_cols: List[str] = []
+    post_cols: List[str] = []
+
+    if has_groups:
+        all_group_idxs = sorted(week_idxs + season_idxs)
+        first_group_idx = min(all_group_idxs)
+        last_group_idx = max(all_group_idxs)
+        last_week_idx = max(week_idxs) if week_idxs else None
+        first_season_group_idx = min(season_idxs) if season_idxs else None
+
+        pre_cols = [c for i, c in enumerate(cols) if i < first_group_idx and not (is_w(c) or is_s(c))]
+
+        if last_week_idx is not None and first_season_group_idx is not None:
+            mid_cols = [
+                c
+                for i, c in enumerate(cols)
+                if last_week_idx < i < first_season_group_idx and not (is_w(c) or is_s(c))
+            ]
+
+        post_cols = [c for i, c in enumerate(cols) if i > last_group_idx and not (is_w(c) or is_s(c))]
+    else:
+        pre_cols = cols[:]
 
     out: List[str] = []
     out.append(f"<h4 style='margin:16px 0 8px 0;'>{h(title)}</h4>")
@@ -415,10 +442,17 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
                 f"border-bottom:1px solid #e8e8e8; white-space:nowrap;'>{h(week_label)}</th>"
             )
 
+        for c in mid_cols:
+            out.append(
+                "<th rowspan='2' style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
+                f"{h(str(c))}</th>"
+            )
+
         if season_cols:
+            left_border = divider_css if week_cols or mid_cols else ""
             out.append(
                 f"<th colspan='{len(season_cols)}' style='text-align:center; padding:8px 10px; "
-                f"border-bottom:1px solid #e8e8e8; white-space:nowrap; {divider_css}'>{h(year_label)}</th>"
+                f"border-bottom:1px solid #e8e8e8; white-space:nowrap; {left_border}'>{h(year_label)}</th>"
             )
 
         for c in post_cols:
@@ -462,7 +496,6 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
     for i, r in enumerate(rows):
         bg = "#ffffff" if i % 2 == 0 else "#fbfbfc"
         out.append(f"<tr style='background:{bg};'>")
-
         for idx, (c, cell) in enumerate(zip(cols, r)):
             cell_html = cell if c in html_cols else h(cell)
             lb = divider_css if (first_season_idx is not None and idx == first_season_idx) else ""
@@ -470,7 +503,6 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
                 f"<td style='padding:7px 10px; border-bottom:1px solid #f0f0f0; white-space:nowrap; {lb}'>"
                 f"{cell_html}</td>"
             )
-
         out.append("</tr>")
 
     out.append("</tbody></table></div>")
@@ -490,6 +522,11 @@ def mlb_team_logo_url(team_id: int) -> str:
 
 def baseball_savant_url(mlbam_id: int) -> str:
     return "https://baseballsavant.mlb.com/savant-player/%s" % mlbam_id
+
+
+def baseball_reference_search_url(player_name: str) -> str:
+    from urllib.parse import quote_plus
+    return f"https://www.baseball-reference.com/search/search.fcgi?search={quote_plus(player_name or '')}"
 
 
 # =========================
@@ -879,6 +916,183 @@ def _prune_seen_rss(state: Dict[str, Any], keep_days: int = 35) -> None:
     state["seen_rss"] = new_seen
 
 
+def _headline_event_bucket(title: str) -> str:
+    t = (title or "").lower()
+
+    buckets = [
+        ("injury", ["injury", "injured", "il", "injured list", "soreness", "strain", "sprain", "mri", "rehab", "shut down", "day-to-day"]),
+        ("promotion", ["called up", "call-up", "promoted", "promotion", "recalled"]),
+        ("demotion", ["optioned", "demoted", "sent down"]),
+        ("transaction", ["dfa", "designated for assignment", "traded", "trade", "claimed", "released", "signed"]),
+        ("role", ["named starter", "named the starter", "named closer", "closing role", "moving into rotation", "in the rotation",
+                  "batting leadoff", "batting second", "batting third", "everyday role", "more playing time",
+                  "bigger role", "role increase"]),
+        ("return", ["activated", "returns", "returning", "reinstated"]),
+    ]
+
+    for bucket, words in buckets:
+        if any(w in t for w in words):
+            return bucket
+    return "news"
+
+
+def _normalize_headline_core(title: str, player_name: str) -> str:
+    t = (title or "").lower()
+    p = (player_name or "").lower()
+
+    if p:
+        t = re.sub(rf"\b{re.escape(p)}\b", " ", t, flags=re.IGNORECASE)
+
+    t = re.sub(r"\b(mlb|milb|report|reports|reportedly|source|sources|says|say|update|updates)\b", " ", t)
+    t = re.sub(r"[^a-z0-9\s]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+
+    words = [w for w in t.split() if len(w) > 2]
+    return " ".join(words[:8])
+
+
+def _semantic_story_key(player_name: str, title: str) -> str:
+    bucket = _headline_event_bucket(title)
+    core = _normalize_headline_core(title, player_name)
+    return f"{player_name.lower()}|{bucket}|{core}"
+
+
+def _source_priority(source_name: str) -> int:
+    s = (source_name or "").lower()
+    if "mlb.com" in s:
+        return 100
+    if "mlb pipeline" in s:
+        return 95
+    if "milb.com" in s:
+        return 92
+    if "baseball america" in s:
+        return 90
+    if "fangraphs" in s:
+        return 88
+    if "baseball prospectus" in s:
+        return 86
+    if "pitcher list" in s:
+        return 84
+    if "mlbtr" in s:
+        return 82
+    if "cbs" in s:
+        return 78
+    if "google news" in s:
+        return 70
+    return 60
+
+
+def _headline_similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, (a or "").lower(), (b or "").lower()).ratio()
+
+
+def _same_story_for_player(player_name: str, title_a: str, title_b: str) -> bool:
+    ka = _semantic_story_key(player_name, title_a)
+    kb = _semantic_story_key(player_name, title_b)
+    if ka == kb:
+        return True
+
+    if _headline_event_bucket(title_a) != _headline_event_bucket(title_b):
+        return False
+
+    core_a = _normalize_headline_core(title_a, player_name)
+    core_b = _normalize_headline_core(title_b, player_name)
+
+    if core_a and core_b and (core_a in core_b or core_b in core_a):
+        return True
+
+    if core_a and core_b and _headline_similarity(core_a, core_b) >= 0.86:
+        return True
+
+    if _headline_similarity(title_a, title_b) >= 0.90:
+        return True
+
+    return False
+
+
+def _story_specificity_score(player_name: str, title: str) -> int:
+    core = _normalize_headline_core(title, player_name)
+    if not core:
+        return 0
+    return len(set(core.split()))
+
+
+def _story_rank(item: Dict[str, Any]) -> Tuple[int, int, int, float]:
+    player = item.get("player", "") or ""
+    title = item.get("title", "") or item.get("desc", "") or ""
+    source = item.get("source", "") or ""
+    dt = _parse_iso_utc(item.get("utc", "")).timestamp()
+    return (
+        _source_priority(source),
+        _story_specificity_score(player, title),
+        len(title),
+        dt,
+    )
+
+
+def dedupe_reports_semantic(items: List[Dict[str, Any]], within_days: int = 5) -> List[Dict[str, Any]]:
+    if not items:
+        return []
+
+    kept: List[Dict[str, Any]] = []
+    items_sorted = sorted(items, key=_story_rank, reverse=True)
+
+    for item in items_sorted:
+        player = item.get("player", "") or ""
+        title = item.get("title", "") or item.get("desc", "") or ""
+        if not player or not title:
+            kept.append(item)
+            continue
+
+        item_dt = _parse_iso_utc(item.get("utc", ""))
+
+        dup_idx: Optional[int] = None
+        for i, existing in enumerate(kept):
+            if existing.get("player", "") != player:
+                continue
+
+            ex_title = existing.get("title", "") or existing.get("desc", "") or ""
+            if not ex_title:
+                continue
+
+            ex_dt = _parse_iso_utc(existing.get("utc", ""))
+            if abs((item_dt - ex_dt).total_seconds()) > within_days * 86400:
+                continue
+
+            if _same_story_for_player(player, title, ex_title):
+                dup_idx = i
+                break
+
+        if dup_idx is None:
+            kept.append(item)
+        else:
+            if _story_rank(item) > _story_rank(kept[dup_idx]):
+                kept[dup_idx] = item
+
+    return sorted(kept, key=lambda x: (_parse_iso_utc(x.get("utc", "")).timestamp(), x.get("player", ""), x.get("source", "")))
+
+
+def _parse_feed_entry_datetime(entry: Any) -> Optional[datetime]:
+    try:
+        if hasattr(entry, "published_parsed") and entry.published_parsed:
+            return datetime(*entry.published_parsed[:6]).replace(tzinfo=tz.tzutc())
+    except Exception:
+        pass
+    try:
+        if hasattr(entry, "updated_parsed") and entry.updated_parsed:
+            return datetime(*entry.updated_parsed[:6]).replace(tzinfo=tz.tzutc())
+    except Exception:
+        pass
+    for attr in ("published", "updated"):
+        raw = getattr(entry, attr, None)
+        if raw:
+            try:
+                return parsedate_to_datetime(raw).astimezone(tz.tzutc())
+            except Exception:
+                pass
+    return None
+
+
 def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7) -> List[Dict[str, Any]]:
     sources: List[Dict[str, str]] = [
         {"name": "MLB.com", "url": MLB_NEWS_FEED},
@@ -897,7 +1111,6 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
 
     _prune_seen_rss(state, keep_days=35)
     seen = state.get("seen_rss", {}) or {}
-
     patterns = _build_name_patterns(names)
     matched: List[Dict[str, Any]] = []
 
@@ -921,15 +1134,7 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
             if not title or not link:
                 continue
 
-            pub_dt: Optional[datetime] = None
-            if hasattr(e, "published_parsed") and e.published_parsed:
-                try:
-                    pub_dt = datetime(*e.published_parsed[:6]).replace(tzinfo=tz.tzutc())
-                except Exception:
-                    pub_dt = None
-            if pub_dt is None:
-                pub_dt = now_utc()
-
+            pub_dt = _parse_feed_entry_datetime(e) or now_utc()
             if pub_dt < cutoff:
                 continue
 
@@ -973,7 +1178,7 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
             seen[cid] = pub_dt.isoformat()
 
     state["seen_rss"] = seen
-    return matched
+    return dedupe_reports_semantic(matched)
 
 
 # =========================
@@ -1031,6 +1236,7 @@ def summarize_opportunity_net(title: str) -> str:
 
 
 def compute_opportunity_signals(items: List[Dict[str, Any]], lookback_days: int = 14) -> Dict[str, Dict[str, Any]]:
+    items = dedupe_reports_semantic(items)
     cutoff = now_utc() - timedelta(days=lookback_days)
     out: Dict[str, Dict[str, Any]] = {}
     for it in items:
@@ -1089,7 +1295,6 @@ def should_include_midweek_adds_now() -> bool:
 
 
 def _fmt_local_time_safe(dt: datetime) -> str:
-    # FIX: avoid %-I (breaks on Windows). Use %I and strip leading zero.
     return dt.strftime("%I:%M %p %Z").lstrip("0")
 
 
@@ -1266,7 +1471,7 @@ def bb9(bb: Any, ip: Any) -> Optional[float]:
 
 
 # =========================
-# MiLB K% / BB% helpers (NEW)
+# MiLB K% / BB% helpers
 # =========================
 def pct_str(num, den, digits: int = 1) -> str:
     try:
@@ -1280,11 +1485,6 @@ def pct_str(num, den, digits: int = 1) -> str:
 
 
 def milb_season_kbb_strings(stat: dict, is_pitcher: bool) -> tuple[str, str]:
-    """
-    Returns (K%, BB%) as strings for MiLB season stats (sportId=21).
-    Hitters: SO/PA, BB/PA
-    Pitchers: SO/BF, BB/BF
-    """
     if not stat:
         return "", ""
 
@@ -1462,21 +1662,21 @@ def week_date_range_monday_sunday(now_local: datetime) -> Tuple[date, date]:
 
 
 # =========================
-# Two-start pitchers
+# Starting pitcher schedule / two-start pitchers
 # =========================
-def two_start_pitchers_week(roster_df: pd.DataFrame) -> List[Dict[str, Any]]:
+def starting_pitcher_schedule_week(roster_df: pd.DataFrame) -> pd.DataFrame:
     roster_df = roster_df.copy()
     roster_df["position"] = roster_df.get("position", "").fillna("").astype(str)
     sp_names = roster_df.loc[roster_df["position"].str.contains("SP", case=False, na=False), "player_name"].tolist()
     sp_set = set(sp_names)
     if not sp_set:
-        return []
+        return pd.DataFrame(columns=["Date", "Day", "Pitcher", "Matchup", "Opponent", "Time (CT)", "Week Starts"])
 
     now_local = local_now()
     mon, sun = week_date_range_monday_sunday(now_local)
 
-    out_count = {n: 0 for n in sp_set}
-    out_games: Dict[str, List[str]] = {n: [] for n in sp_set}
+    rows: List[Dict[str, Any]] = []
+    counts = {n: 0 for n in sp_set}
 
     d = mon
     while d <= sun:
@@ -1485,25 +1685,72 @@ def two_start_pitchers_week(roster_df: pd.DataFrame) -> List[Dict[str, Any]]:
             games = statsapi.schedule(date=d_str, sportId=1)
         except Exception:
             games = []
+
         for g in games:
+            game_dt_utc = g.get("game_datetime")
+            first_pitch_ct = ""
+            if game_dt_utc:
+                try:
+                    dt = datetime.fromisoformat(game_dt_utc.replace("Z", "+00:00"))
+                    ct = dt.astimezone(pytz.timezone(TZ_NAME))
+                    first_pitch_ct = _fmt_local_time_safe(ct)
+                except Exception:
+                    first_pitch_ct = g.get("game_time", "") or ""
+
             away_pp = (g.get("away_probable_pitcher") or "").strip()
             home_pp = (g.get("home_probable_pitcher") or "").strip()
             away = g.get("away_name", "")
             home = g.get("home_name", "")
-            label = d.strftime("%a")
 
             if away_pp in sp_set:
-                out_count[away_pp] += 1
-                out_games[away_pp].append(f"{label} at {home}")
+                counts[away_pp] += 1
+                rows.append(
+                    {
+                        "Date": d.strftime("%b %d"),
+                        "Day": d.strftime("%a"),
+                        "Pitcher": away_pp,
+                        "Matchup": "at",
+                        "Opponent": home,
+                        "Time (CT)": first_pitch_ct,
+                    }
+                )
             if home_pp in sp_set:
-                out_count[home_pp] += 1
-                out_games[home_pp].append(f"{label} vs {away}")
+                counts[home_pp] += 1
+                rows.append(
+                    {
+                        "Date": d.strftime("%b %d"),
+                        "Day": d.strftime("%a"),
+                        "Pitcher": home_pp,
+                        "Matchup": "vs",
+                        "Opponent": away,
+                        "Time (CT)": first_pitch_ct,
+                    }
+                )
         d += timedelta(days=1)
 
+    for row in rows:
+        row["Week Starts"] = counts.get(row["Pitcher"], 0)
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=["Date", "Day", "Pitcher", "Matchup", "Opponent", "Time (CT)", "Week Starts"])
+
+    df["sort_key"] = pd.to_datetime(df["Date"] + f" {local_now().year}", format="%b %d %Y", errors="coerce")
+    df = df.sort_values(["sort_key", "Pitcher"]).drop(columns=["sort_key"]).reset_index(drop=True)
+    return df
+
+
+def two_start_pitchers_week(roster_df: pd.DataFrame) -> List[Dict[str, Any]]:
+    sched = starting_pitcher_schedule_week(roster_df)
+    if sched.empty:
+        return []
+
     twos: List[Dict[str, Any]] = []
-    for p, c in out_count.items():
-        if c >= 2:
-            twos.append({"player": p, "starts": c, "details": out_games.get(p, [])})
+    for pitcher, sub in sched.groupby("Pitcher"):
+        starts = int(sub["Week Starts"].iloc[0]) if "Week Starts" in sub.columns and not sub.empty else len(sub)
+        if starts >= 2:
+            details = [f"{r['Day']} {r['Matchup']} {r['Opponent']}" for _, r in sub.iterrows()]
+            twos.append({"player": pitcher, "starts": starts, "details": details})
     twos.sort(key=lambda x: (-x["starts"], x["player"]))
     return twos
 
@@ -1586,6 +1833,8 @@ def compute_major_league_adds(
 ) -> pd.DataFrame:
     if available_df is None or available_df.empty:
         return pd.DataFrame()
+
+    recent_reports = dedupe_reports_semantic(recent_reports)
 
     cand = available_df.copy()
     if top500_df is not None and not top500_df.empty:
@@ -1791,18 +2040,20 @@ def compute_major_league_adds(
 
 
 # =========================
-# Prospect adds (REPLACED: includes K% + BB%)
+# Prospect adds (display simplified, scoring intact)
 # =========================
 def compute_prospect_adds(
     available_df: pd.DataFrame,
     dd_df: pd.DataFrame,
     bp_df: pd.DataFrame,
-    recent_reports: list[dict],
-    state: dict,
+    recent_reports: List[Dict[str, Any]],
+    state: Dict[str, Any],
     year: int
 ) -> pd.DataFrame:
     if available_df is None or available_df.empty:
         return pd.DataFrame()
+
+    recent_reports = dedupe_reports_semantic(recent_reports)
 
     cand = available_df.copy()
     if dd_df is not None and not dd_df.empty:
@@ -1810,7 +2061,6 @@ def compute_prospect_adds(
     if bp_df is not None and not bp_df.empty:
         cand = cand.merge(bp_df[["player_name", "bp_rank"]], on="player_name", how="left")
 
-    # MLBAM ids
     name_to_id = {}
     for nm in cand["player_name"].tolist():
         pid = lookup_mlbam_id(nm, state)
@@ -1821,10 +2071,8 @@ def compute_prospect_adds(
 
     cand["Level"] = cand["pid"].apply(lambda x: infer_player_level(int(x), year) if pd.notna(x) else "")
 
-    # Filter out Asia
     cand = cand[~cand.apply(lambda r: looks_like_asia(str(r.get("team_abbrev","")), str(r.get("Level",""))), axis=1)].copy()
 
-    # Filter current-year draft picks without pro evidence
     def is_draft_pick(row):
         sy = row.get("signed_year", None)
         has_pro = bool(row.get("pid")) or bool(str(row.get("Level","")).strip())
@@ -1832,12 +2080,10 @@ def compute_prospect_adds(
 
     cand = cand[~cand.apply(is_draft_pick, axis=1)].copy()
 
-    # Prospects only (not MLB)
     cand = cand[~cand["Level"].astype(str).str.upper().str.contains("MLB")].copy()
     if cand.empty:
         return pd.DataFrame()
 
-    # --- Performance + K% and BB% ---
     perf_raw = []
     k_pct_list = []
     bb_pct_list = []
@@ -1888,10 +2134,14 @@ def compute_prospect_adds(
                     bb_pct = f"{(bb_f/pa_f)*100:.1f}%"
 
                 score = hr*1.5 + sb*1.2
-                try: score += float(obp or 0) * 10
-                except Exception: pass
-                try: score += float(avg or 0) * 8
-                except Exception: pass
+                try:
+                    score += float(obp or 0) * 10
+                except Exception:
+                    pass
+                try:
+                    score += float(avg or 0) * 8
+                except Exception:
+                    pass
 
             else:
                 pit = statsapi.get("stats", {"group": "pitching", "stats": "season", "sportId": 21, "personIds": str(pid)})
@@ -1915,8 +2165,10 @@ def compute_prospect_adds(
 
                     ipf = innings_to_float(ip) or 0.0
                     score = ipf*0.5 + so*0.25 - bb*0.1
-                    try: score += max(0.0, 8.0 - float(era)) * 2.5
-                    except Exception: pass
+                    try:
+                        score += max(0.0, 8.0 - float(era)) * 2.5
+                    except Exception:
+                        pass
 
         except Exception:
             pass
@@ -1928,7 +2180,6 @@ def compute_prospect_adds(
     cand["perf_raw"] = perf_raw
     cand["K%"] = k_pct_list
     cand["BB%"] = bb_pct_list
-
     cand["perf_pct"] = percentile_score(cand["perf_raw"], True).fillna(0)
 
     cand["dd_rank_num"] = pd.to_numeric(cand.get("dd_rank"), errors="coerce")
@@ -1973,20 +2224,30 @@ def compute_prospect_adds(
     for _, r in cand.iterrows():
         score = float(r.get("Add Score") or 0.0)
         pts = 0.0
-        if score >= 80: pts += 2.7
-        elif score >= 70: pts += 2.0
-        elif score >= 60: pts += 1.3
-        elif score >= 50: pts += 0.7
-        else: pts += 0.3
+        if score >= 80:
+            pts += 2.7
+        elif score >= 70:
+            pts += 2.0
+        elif score >= 60:
+            pts += 1.3
+        elif score >= 50:
+            pts += 0.7
+        else:
+            pts += 0.3
         pts += level_bonus(r.get("Level",""))
         pts += min(1.8, int(r.get("opp_7d", 0) or 0) * 0.6)
         pts += min(1.0, int(r.get("mentions_7d", 0) or 0) * 0.15)
 
-        if pts >= 5.4: urg = 5
-        elif pts >= 4.3: urg = 4
-        elif pts >= 3.2: urg = 3
-        elif pts >= 2.2: urg = 2
-        else: urg = 1
+        if pts >= 5.4:
+            urg = 5
+        elif pts >= 4.3:
+            urg = 4
+        elif pts >= 3.2:
+            urg = 3
+        elif pts >= 2.2:
+            urg = 2
+        else:
+            urg = 1
         urg_vals.append(urg)
 
     cand["Urgency"] = urg_vals
@@ -1997,21 +2258,19 @@ def compute_prospect_adds(
     out["Savant"] = out["pid_int"].apply(
         lambda x: button(baseball_savant_url(int(x)), "Savant", bg="#0b8043") if pd.notna(x) else ""
     )
+    out["B-Ref"] = out["Name"].apply(
+        lambda x: button(baseball_reference_search_url(str(x)), "B-Ref", bg="#5f6368") if str(x).strip() else ""
+    )
 
-    # include K% and BB% in the prospect table output
     out = out[[
         "Name", "Team", "Level", "Age", "Position",
-        "K%", "BB%",
         "dd_rank", "bp_rank",
-        "Add Score", "Urgency", "Savant",
-        "mentions_7d", "opp_7d"
+        "Add Score", "Urgency", "Savant", "B-Ref"
     ]]
 
     out = out.rename(columns={
         "dd_rank": "Dynasty Dugout",
         "bp_rank": "Baseball Prospectus",
-        "mentions_7d": "Mentions (7d)",
-        "opp_7d": "Opp Hits (7d)"
     })
 
     def _int_no_decimal(x):
@@ -2032,7 +2291,7 @@ def compute_prospect_adds(
 
 
 # =========================
-# Daily email builder (unchanged)
+# Daily email builder
 # =========================
 def build_daily_bodies(
     official_items: List[Dict[str, Any]],
@@ -2171,13 +2430,9 @@ def build_daily_bodies(
 
 
 # =========================
-# Spring Training module (NEW)
+# Spring Training module (roster batting lines only)
 # =========================
-def is_spring_training_season(now_local: datetime | None = None) -> bool:
-    """
-    True if we're in typical spring months AND there are Spring Training games recently.
-    Falls back to month window if StatsAPI is flaky.
-    """
+def is_spring_training_season(now_local: Optional[datetime] = None) -> bool:
     now_local = now_local or local_now()
     if now_local.month not in SPRING_TRAINING_MONTHS:
         return False
@@ -2190,107 +2445,21 @@ def is_spring_training_season(now_local: datetime | None = None) -> bool:
         return True
 
 
-def _boxscore_top_lines(game_pk: int) -> dict:
-    """
-    Pull basic score + a few top hitters/pitchers from boxscore.
-    """
-    out = {
-        "game_pk": game_pk,
-        "away": "",
-        "home": "",
-        "away_score": "",
-        "home_score": "",
-        "status": "",
-        "top_hitters": [],
-        "top_pitchers": [],
-        "link": f"https://www.mlb.com/gameday/{game_pk}",
-    }
+def fetch_yesterdays_spring_training_batting_lines(roster_df: pd.DataFrame) -> List[Dict[str, Any]]:
+    if roster_df is None or roster_df.empty:
+        return []
 
-    try:
-        bs = statsapi.boxscore_data(game_pk)
-    except Exception:
-        return out
+    roster_names = set(roster_df["player_name"].astype(str).tolist())
+    team_by_player = dict(zip(roster_df["player_name"].astype(str), roster_df.get("team_abbrev", "").astype(str)))
 
-    try:
-        out["away"] = bs.get("teamInfo", {}).get("away", {}).get("name", "") or ""
-        out["home"] = bs.get("teamInfo", {}).get("home", {}).get("name", "") or ""
-    except Exception:
-        pass
-
-    try:
-        ls = bs.get("linescore", {}) or {}
-        out["away_score"] = ls.get("teams", {}).get("away", {}).get("runs", "")
-        out["home_score"] = ls.get("teams", {}).get("home", {}).get("runs", "")
-    except Exception:
-        pass
-
-    try:
-        out["status"] = bs.get("gameBoxInfo", {}).get("status", "") or ""
-    except Exception:
-        pass
-
-    hitters = []
-    for side_key in ("awayBatters", "homeBatters"):
-        for row in (bs.get(side_key, []) or []):
-            nm = row.get("name", "")
-            if not nm:
-                continue
-            ab = row.get("ab", "")
-            h_ = row.get("h", "")
-            rbi = row.get("rbi", "")
-            hr = row.get("hr", "")
-            bb = row.get("bb", "")
-            so = row.get("so", "")
-            sb = row.get("sb", "")
-
-            try:
-                impact = (int(hr or 0) * 5) + (int(rbi or 0) * 2) + int(h_ or 0) + (int(sb or 0) * 2)
-            except Exception:
-                impact = 0
-
-            line = f"{nm}: {ab}-{h_}, HR {hr}, RBI {rbi}, BB {bb}, K {so}, SB {sb}"
-            hitters.append((impact, line))
-
-    hitters.sort(key=lambda x: x[0], reverse=True)
-    out["top_hitters"] = [s for _, s in hitters[:6]]
-
-    pitchers = []
-    for side_key in ("awayPitchers", "homePitchers"):
-        for row in (bs.get(side_key, []) or []):
-            nm = row.get("name", "")
-            if not nm:
-                continue
-            ip = row.get("ip", "")
-            so = row.get("so", "")
-            bb = row.get("bb", "")
-            er = row.get("er", "")
-            h_ = row.get("h", "")
-
-            try:
-                impact = (int(so or 0) * 2) - (int(bb or 0) * 1) - (int(er or 0) * 2)
-            except Exception:
-                impact = 0
-
-            line = f"{nm}: {ip} IP, H {h_}, ER {er}, BB {bb}, K {so}"
-            pitchers.append((impact, line))
-
-    pitchers.sort(key=lambda x: x[0], reverse=True)
-    out["top_pitchers"] = [s for _, s in pitchers[:5]]
-
-    return out
-
-
-def fetch_yesterdays_spring_training_results() -> list[dict]:
-    """
-    Get all spring training games from yesterday + top lines.
-    """
     yday = (local_now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
     try:
         games = statsapi.schedule(date=yday, sportId=1, gameType=SPRING_GAME_TYPE)
     except Exception:
         games = []
 
-    results = []
+    rows: List[Dict[str, Any]] = []
+
     for g in games:
         game_pk = g.get("game_id") or g.get("game_pk") or g.get("gamePk")
         if not game_pk:
@@ -2300,119 +2469,110 @@ def fetch_yesterdays_spring_training_results() -> list[dict]:
         except Exception:
             continue
 
-        details = _boxscore_top_lines(game_pk)
-        details["away_score"] = details["away_score"] if details["away_score"] != "" else g.get("away_score", "")
-        details["home_score"] = details["home_score"] if details["home_score"] != "" else g.get("home_score", "")
-        details["away"] = details["away"] or (g.get("away_name", "") or "")
-        details["home"] = details["home"] or (g.get("home_name", "") or "")
-        details["status"] = details["status"] or (g.get("status", "") or "")
-        details["date"] = yday
-
-        results.append(details)
-
-    def _scored_first(x):
         try:
-            int(x.get("away_score", ""))
-            int(x.get("home_score", ""))
-            return 0
+            bs = statsapi.boxscore_data(game_pk)
         except Exception:
-            return 1
+            continue
 
-    results.sort(key=lambda x: (_scored_first(x), x.get("home", "")))
-    return results
+        away_team = (
+            bs.get("teamInfo", {}).get("away", {}).get("abbreviation")
+            or bs.get("teamInfo", {}).get("away", {}).get("name")
+            or g.get("away_name", "")
+        )
+        home_team = (
+            bs.get("teamInfo", {}).get("home", {}).get("abbreviation")
+            or bs.get("teamInfo", {}).get("home", {}).get("name")
+            or g.get("home_name", "")
+        )
+
+        sides = [
+            ("awayBatters", away_team, home_team),
+            ("homeBatters", home_team, away_team),
+        ]
+
+        for side_key, team_name, opp_name in sides:
+            for row in (bs.get(side_key, []) or []):
+                nm = str(row.get("name", "")).strip()
+                if not nm or nm not in roster_names:
+                    continue
+
+                ab = str(row.get("ab", "")).strip()
+                h_ = str(row.get("h", "")).strip()
+                hr = str(row.get("hr", "")).strip()
+                rbi = str(row.get("rbi", "")).strip()
+                bb = str(row.get("bb", "")).strip()
+                so = str(row.get("so", "")).strip()
+                sb = str(row.get("sb", "")).strip()
+
+                stat_blob = f"{ab}{h_}{hr}{rbi}{bb}{so}{sb}".strip()
+                if not stat_blob:
+                    continue
+
+                rows.append(
+                    {
+                        "Player": nm,
+                        "Team": team_by_player.get(nm, "") or team_name,
+                        "Opponent": opp_name,
+                        "AB": ab,
+                        "H": h_,
+                        "HR": hr,
+                        "RBI": rbi,
+                        "BB": bb,
+                        "K": so,
+                        "SB": sb,
+                    }
+                )
+
+    rows = sorted(rows, key=lambda x: (x.get("Player", ""), x.get("Team", ""), x.get("Opponent", "")))
+    return rows
 
 
-def build_spring_training_allgames_email(results: list[dict]) -> tuple[str, str]:
+def build_spring_training_batting_email(rows: List[Dict[str, Any]]) -> Tuple[str, str]:
     date_str = (local_now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    if not results:
-        text = f"Spring Training Recap — {date_str}\n\nNo spring training games found yesterday."
+    if not rows:
+        text = f"Spring Training Batting Lines — {date_str}\n\nNo roster batting lines found yesterday."
         html = (
             "<html><body style='font-family:Arial, Helvetica, sans-serif; color:#111;'>"
-            f"<h2 style='margin:0 0 8px 0;'>Spring Training Recap — {h(date_str)}</h2>"
-            "<div style='color:#666;'>No spring training games found yesterday.</div>"
+            f"<h2 style='margin:0 0 8px 0;'>Spring Training Batting Lines — {h(date_str)}</h2>"
+            "<div style='color:#666;'>No roster batting lines found yesterday.</div>"
             "</body></html>"
         )
         return text, html
 
-    text_lines = [f"Spring Training Recap — {date_str}", ""]
-    for r in results:
-        away = r.get("away", "")
-        home = r.get("home", "")
-        ascore = r.get("away_score", "")
-        hscore = r.get("home_score", "")
-        status = r.get("status", "")
-        text_lines.append(f"- {away} {ascore} @ {home} {hscore} ({status})")
-        for s in (r.get("top_hitters") or [])[:4]:
-            text_lines.append(f"    H: {s}")
-        for s in (r.get("top_pitchers") or [])[:3]:
-            text_lines.append(f"    P: {s}")
-        if r.get("link"):
-            text_lines.append(f"    {r['link']}")
-        text_lines.append("")
-
+    text_lines = [f"Spring Training Batting Lines — {date_str}", ""]
+    for r in rows:
+        text_lines.append(
+            f"- {r['Player']} ({r['Team']}) vs {r['Opponent']}: AB {r['AB']}, H {r['H']}, HR {r['HR']}, RBI {r['RBI']}, BB {r['BB']}, K {r['K']}, SB {r['SB']}"
+        )
     text_body = "\n".join(text_lines)
 
-    html = []
+    df = pd.DataFrame(rows)[["Player", "Team", "Opponent", "AB", "H", "HR", "RBI", "BB", "K", "SB"]]
+
+    html: List[str] = []
     html.append("<html><body style='font-family:Arial, Helvetica, sans-serif; line-height:1.35; color:#111;'>")
-    html.append(f"<h2 style='margin:0 0 8px 0;'>Spring Training Recap — {h(date_str)}</h2>")
-
-    for r in results:
-        away = r.get("away", "")
-        home = r.get("home", "")
-        ascore = h(str(r.get("away_score", "")))
-        hscore = h(str(r.get("home_score", "")))
-        status = h(str(r.get("status", "")))
-        link = r.get("link", "")
-
-        html.append(
-            "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e8e8e8; border-radius:12px;'>"
-            f"<div style='font-size:16px; margin-bottom:6px;'><b>{h(away)} {ascore} @ {h(home)} {hscore}</b> "
-            f"<span style='color:#666; font-size:13px;'>{status}</span></div>"
-        )
-
-        th = r.get("top_hitters") or []
-        tp = r.get("top_pitchers") or []
-
-        if th:
-            html.append("<div style='margin-top:8px;'><b>Top hitters</b><ul style='margin:6px 0 0 0; padding-left:18px;'>")
-            for s in th[:6]:
-                html.append(f"<li style='margin:4px 0;'>{h(s)}</li>")
-            html.append("</ul></div>")
-
-        if tp:
-            html.append("<div style='margin-top:10px;'><b>Top pitchers</b><ul style='margin:6px 0 0 0; padding-left:18px;'>")
-            for s in tp[:5]:
-                html.append(f"<li style='margin:4px 0;'>{h(s)}</li>")
-            html.append("</ul></div>")
-
-        if link:
-            html.append(f"<div style='margin-top:10px;'>{button(link, 'Game', bg='#1a73e8')}</div>")
-
-        html.append("</div>")
-
+    html.append(f"<h2 style='margin:0 0 8px 0;'>Spring Training Batting Lines — {h(date_str)}</h2>")
+    html.append(render_table_html(df, "Roster Batting Lines", html_cols=set()))
     html.append("</body></html>")
     return text_body, "".join(html)
 
 
 def run_spring_training_daily_allgames() -> None:
-    """
-    Sends a daily email during spring training with ALL games + top performers.
-    """
     if not is_spring_training_season(local_now()):
         print("[spring] Not in spring training window; skipping.")
         return
 
-    results = fetch_yesterdays_spring_training_results()
+    roster_df = load_roster()
+    rows = fetch_yesterdays_spring_training_batting_lines(roster_df)
     subj_date = (local_now().date() - timedelta(days=1)).strftime("%b %d")
-    subject = f"Spring Training Recap — {subj_date}"
+    subject = f"Spring Training Batting Lines — {subj_date}"
 
-    text_body, html_body = build_spring_training_allgames_email(results)
+    text_body, html_body = build_spring_training_batting_email(rows)
     send_email(subject, text_body, html_body)
 
 
 # =========================
-# Daily runner (unchanged except: optional spring mode in main)
+# Daily runner
 # =========================
 def run_daily(lookback_hours: Optional[int] = None) -> None:
     state = load_state()
@@ -2449,7 +2609,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
             append_jsonl(WEEKLY_OFFICIAL_PATH, {"player": player, **t})
 
     print("[daily] starting RSS/news fetch (last 7 days only, de-duped)...")
-    reports = fetch_reports(roster, state, max_age_days=7)
+    reports = dedupe_reports_semantic(fetch_reports(roster, state, max_age_days=7))
     for r in reports:
         append_jsonl(WEEKLY_REPORTS_PATH, r)
 
@@ -2523,12 +2683,11 @@ def mark_weekly_sent(state: Dict[str, Any]) -> None:
 
 
 # =========================
-# Weekly row helpers (REPLACED: MiLB K%/BB% fallback + DD Rank)
+# Weekly row helpers
 # =========================
 def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None, dd_rank=""):
     status = build_status_html(name, injury_players, wk or {}, is_pitcher=False)
 
-    # MLB uses FanGraphs (pybaseball). MiLB fallback uses StatsAPI season totals.
     if fg_adv:
         season_k = (fg_adv or {}).get("K%", "") or ""
         season_bb = (fg_adv or {}).get("BB%", "") or ""
@@ -2536,12 +2695,11 @@ def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None,
         season_k, season_bb = milb_season_kbb_strings(ss or {}, is_pitcher=False)
 
     return {
-        "Status": status,
         "Player": name,
         "Team": team,
         "Level": level,
         "Position": pos,
-        "DD Rank": dd_rank,  # show only for MiLB tables
+        "DD Rank": dd_rank,
 
         "W G": (wk or {}).get("gamesPlayed", ""),
         "W H": (wk or {}).get("hits", ""),
@@ -2551,6 +2709,8 @@ def hitter_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None,
         "W AVG": (wk or {}).get("avg", ""),
         "W OBP": (wk or {}).get("obp", ""),
         "W OPS": (wk or {}).get("ops", ""),
+
+        "Status": status,
 
         "S G": (ss or {}).get("gamesPlayed", ""),
         "S H": (ss or {}).get("hits", ""),
@@ -2578,7 +2738,6 @@ def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None
     k9v = k9(so_season, ip_season)
     bb9v = bb9(bb_season, ip_season)
 
-    # MLB uses FanGraphs (pybaseball). MiLB fallback uses StatsAPI season totals.
     if fg_adv:
         season_fip = (fg_adv or {}).get("FIP", "") or ""
         season_k = (fg_adv or {}).get("K%", "") or ""
@@ -2588,18 +2747,19 @@ def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None
         season_k, season_bb = milb_season_kbb_strings(ss or {}, is_pitcher=True)
 
     return {
-        "Status": status,
         "Pitcher": name,
         "Team": team,
         "Level": level,
         "Position": pos,
-        "DD Rank": dd_rank,  # show only for MiLB tables
+        "DD Rank": dd_rank,
 
         "W GS": (wk or {}).get("gamesStarted", ""),
         "W IP": (wk or {}).get("inningsPitched", ""),
         "W ERA": (wk or {}).get("era", ""),
         "W SO": (wk or {}).get("strikeOuts", ""),
         "W BB": (wk or {}).get("baseOnBalls", ""),
+
+        "Status": status,
 
         "S Starts": (ss or {}).get("gamesStarted", ""),
         "S Innings": (ss or {}).get("inningsPitched", ""),
@@ -2614,7 +2774,7 @@ def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None
 
 
 # =========================
-# Weekly runner (UPDATED: DD Rank map + MLB/MiLB table columns/splits)
+# Weekly runner
 # =========================
 def run_weekly(force: bool = False) -> None:
     print("[weekly] ENTER run_weekly")
@@ -2654,7 +2814,7 @@ def run_weekly(force: bool = False) -> None:
     roster_pids = [int(x) for x in name_to_id.values() if x]
 
     official_news = read_jsonl(WEEKLY_OFFICIAL_PATH)
-    reports_news = read_jsonl(WEEKLY_REPORTS_PATH)
+    reports_news = dedupe_reports_semantic(read_jsonl(WEEKLY_REPORTS_PATH))
 
     w_start, w_end = previous_monday_sunday_window(now_local)
 
@@ -2694,7 +2854,6 @@ def run_weekly(force: bool = False) -> None:
     roster_info["is_pitcher"] = roster_info["position"].apply(is_pitcher_position)
     roster_info["is_mlb"] = roster_info["Level"].astype(str).str.upper().str.contains("MLB")
 
-    # DD ranks (NEW): map for showing DD Rank in MiLB tables
     dd_df = load_dynasty_dugout_rankings()
     dd_rank_map = {}
     if dd_df is not None and not dd_df.empty:
@@ -2720,6 +2879,7 @@ def run_weekly(force: bool = False) -> None:
             opp_alerts_weekly.append({"player": p, "confidence": conf, "notes": d.get("notes", [])[:2], "links": d.get("links", [])[:2]})
     opp_alerts_weekly.sort(key=lambda x: ({"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(x["confidence"], 9), x["player"]))
 
+    sp_schedule_df = starting_pitcher_schedule_week(roster_df)
     two_start_list = two_start_pitchers_week(roster_df)
 
     hot_hit_df, hot_sp_df, hot_rp_df = hot_week_tables(
@@ -2729,7 +2889,6 @@ def run_weekly(force: bool = False) -> None:
         {**week_pit_mlb, **week_pit_milb},
     )
 
-    # --- Build hitters tables ---
     hitters_rows: List[Dict[str, Any]] = []
     for _, r in roster_info.iterrows():
         if r["is_pitcher"]:
@@ -2740,7 +2899,6 @@ def run_weekly(force: bool = False) -> None:
         pos = r.get("position", "")
         pid = r.get("pid")
         level = "MLB" if r["is_mlb"] else r.get("Level", "")
-
         dd_rank = dd_rank_map.get(nm, "")
 
         if r["is_mlb"]:
@@ -2762,20 +2920,15 @@ def run_weekly(force: bool = False) -> None:
         hitters_mlb = pd.DataFrame()
         hitters_milb = pd.DataFrame()
     else:
-        # Column layouts (NEW)
-        hitter_cols_base = ["Status", "Player", "Team", "Level", "Position"]
+        hitter_cols_base = ["Player", "Team", "Level", "Position"]
 
-        hitter_cols_stats = [
-            "W G", "W H", "W HR", "W RBI", "W SB", "W AVG", "W OBP", "W OPS",
-            "S G", "S H", "S HR", "S RBI", "S SB", "S AVG", "S OBP", "S OPS",
-            "S wRC+", "S K%", "S BB%",
-            "Savant"
-        ]
+        hitter_week_cols = ["W G", "W H", "W HR", "W RBI", "W SB", "W AVG", "W OBP", "W OPS"]
+        hitter_status_col = ["Status"]
+        hitter_season_cols = ["S G", "S H", "S HR", "S RBI", "S SB", "S AVG", "S OBP", "S OPS", "S wRC+", "S K%", "S BB%", "Savant"]
 
-        hitter_cols_mlb = hitter_cols_base + hitter_cols_stats
-        hitter_cols_milb = hitter_cols_base + ["DD Rank"] + hitter_cols_stats
+        hitter_cols_mlb = hitter_cols_base + hitter_week_cols + hitter_status_col + hitter_season_cols
+        hitter_cols_milb = hitter_cols_base + ["DD Rank"] + hitter_week_cols + hitter_status_col + hitter_season_cols
 
-        # keep helper cols for sorting/splitting
         hitters_df["is_mlb"] = hitters_df["Level"].astype(str).str.upper().str.contains("MLB")
         hitters_df["pos_key"] = hitters_df["Position"].apply(_pos_sort_key_mlb)
 
@@ -2792,7 +2945,6 @@ def run_weekly(force: bool = False) -> None:
             .reset_index(drop=True)
         )
 
-    # --- Build pitchers tables ---
     pitchers_rows: List[Dict[str, Any]] = []
     for _, r in roster_info.iterrows():
         if not r["is_pitcher"]:
@@ -2802,7 +2954,6 @@ def run_weekly(force: bool = False) -> None:
         pos = r.get("position", "")
         pid = r.get("pid")
         level = "MLB" if r["is_mlb"] else r.get("Level", "")
-
         dd_rank = dd_rank_map.get(nm, "")
 
         if r["is_mlb"]:
@@ -2818,14 +2969,13 @@ def run_weekly(force: bool = False) -> None:
     if not pitchers_df.empty:
         pitchers_df["is_mlb"] = pitchers_df["Level"].astype(str).str.upper().str.contains("MLB")
 
-        pitcher_cols_base = ["Status", "Pitcher", "Team", "Level", "Position"]
-        pitcher_cols_stats = [
-            "W GS", "W IP", "W ERA", "W SO", "W BB",
-            "S Starts", "S Innings", "S FIP", "S K%", "S BB%", "S K/9", "S BB/9",
-            "Savant"
-        ]
-        pitcher_cols_mlb = pitcher_cols_base + pitcher_cols_stats
-        pitcher_cols_milb = pitcher_cols_base + ["DD Rank"] + pitcher_cols_stats
+        pitcher_cols_base = ["Pitcher", "Team", "Level", "Position"]
+        pitcher_week_cols = ["W GS", "W IP", "W ERA", "W SO", "W BB"]
+        pitcher_status_col = ["Status"]
+        pitcher_season_cols = ["S Starts", "S Innings", "S FIP", "S K%", "S BB%", "S K/9", "S BB/9", "Savant"]
+
+        pitcher_cols_mlb = pitcher_cols_base + pitcher_week_cols + pitcher_status_col + pitcher_season_cols
+        pitcher_cols_milb = pitcher_cols_base + ["DD Rank"] + pitcher_week_cols + pitcher_status_col + pitcher_season_cols
 
         pit_mlb = (
             pitchers_df[pitchers_df["is_mlb"]][[c for c in pitcher_cols_mlb if c in pitchers_df.columns]]
@@ -2918,6 +3068,12 @@ def run_weekly(force: bool = False) -> None:
                 )
             html.append("</div>")
 
+    html.append(section_header("Starting Pitcher Schedule", "#1a73e8"))
+    if sp_schedule_df is None or sp_schedule_df.empty:
+        html.append("<div style='color:#666;'>No scheduled starts found for rostered starting pitchers yet.</div>")
+    else:
+        html.append(render_table_html(sp_schedule_df, "Projected Starts This Week", html_cols=set()))
+
     html.append(section_header("Two-Start Pitchers", "#1a73e8"))
     if not two_start_list:
         html.append("<div style='color:#666;'>No 2-start probables detected (or probables not posted yet).</div>")
@@ -2928,10 +3084,14 @@ def run_weekly(force: bool = False) -> None:
             html.append(f"<li style='margin:6px 0;'><b>{h(t['player'])}</b> — {h(str(t['starts']))} starts. <span style='color:#555'>{h(det)}</span></li>")
         html.append("</ul>")
 
-    html.append(section_header("Hot Week Performances", "#f9ab00"))
-    html.append(render_table_html(hot_hit_df, "Hot Hitters", html_cols=set()))
-    html.append(render_table_html(hot_sp_df, "Hot Starters", html_cols=set()))
-    html.append(render_table_html(hot_rp_df, "Hot Relievers", html_cols=set()))
+    if (hot_hit_df is not None and not hot_hit_df.empty) or (hot_sp_df is not None and not hot_sp_df.empty) or (hot_rp_df is not None and not hot_rp_df.empty):
+        html.append(section_header("Hot Week Performances", "#f9ab00"))
+        if hot_hit_df is not None and not hot_hit_df.empty:
+            html.append(render_table_html(hot_hit_df, "Hot Hitters", html_cols=set()))
+        if hot_sp_df is not None and not hot_sp_df.empty:
+            html.append(render_table_html(hot_sp_df, "Hot Starters", html_cols=set()))
+        if hot_rp_df is not None and not hot_rp_df.empty:
+            html.append(render_table_html(hot_rp_df, "Hot Relievers", html_cols=set()))
 
     html.append("<div style='border-top:2px solid #d0d0d0; margin:16px 0;'></div>")
     if not hitters_mlb.empty:
@@ -3016,7 +3176,7 @@ def run_weekly(force: bool = False) -> None:
     if prospect_adds_df is None or prospect_adds_df.empty:
         html.append("<div style='color:#666;'>No prospect add candidates found in available pool after filters.</div>")
     else:
-        html.append(render_table_html(prospect_adds_df, "Top Prospect Adds (Available) — max 10", html_cols={"Savant"}))
+        html.append(render_table_html(prospect_adds_df, "Top Prospect Adds (Available) — max 10", html_cols={"Savant", "B-Ref"}))
 
     html.append("</body></html>")
     html_body = "".join(html)
@@ -3050,7 +3210,7 @@ def run_weekly_test() -> None:
 
 
 # =========================
-# Main (UPDATED: spring_training_daily mode)
+# Main
 # =========================
 def main() -> None:
     ensure_state_files()
@@ -3065,7 +3225,7 @@ def main() -> None:
         run_daily_realnews_test()
     elif mode == "weekly_test":
         run_weekly_test()
-    elif mode == "spring_training_daily":
+    elif mode in ("spring_training_daily", "spring_daily_all"):
         run_spring_training_daily_allgames()
     elif mode == "daily":
         run_daily()
