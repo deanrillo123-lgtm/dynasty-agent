@@ -100,7 +100,7 @@ jobs:
 
           RUN_MODE: ${{ inputs.run_mode }}
           IS_SCHEDULED: "0"
-        run: python -u agent_updated.py
+        run: python -u agent.py
 
       - name: Run scheduled (mode selected)
         if: github.event_name == 'schedule'
