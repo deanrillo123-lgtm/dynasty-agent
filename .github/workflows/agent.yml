@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "daily | weekly | spring_daily_all | smtp_test | news_test | daily_realnews_test | weekly_test"
+        description: "daily | weekly | spring_daily_all | spring_training_daily | smtp_test | news_test | daily_realnews_test | weekly_test"
         required: true
         default: "smtp_test"
         type: choice
@@ -20,6 +20,7 @@ on:
           - daily
           - weekly
           - spring_daily_all
+          - spring_training_daily
 
 concurrency:
   group: dynasty-agent-main
@@ -99,7 +100,7 @@ jobs:
 
           RUN_MODE: ${{ inputs.run_mode }}
           IS_SCHEDULED: "0"
-        run: python -u agent.py
+        run: python -u agent_updated.py
 
       - name: Run scheduled (mode selected)
         if: github.event_name == 'schedule'
@@ -126,7 +127,7 @@ jobs:
           echo "Running RUN_MODE=$MODE"
           export RUN_MODE="$MODE"
 
-          timeout 45m python -u agent.py
+          timeout 45m python -u agent_updated.py
 
       - name: Commit state/logs (if changed)
         if: github.event_name == 'schedule'
