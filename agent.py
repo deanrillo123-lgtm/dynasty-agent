@@ -1,3 +1,4 @@
+
 import os
 import json
 import smtplib
@@ -421,7 +422,7 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
         pre_cols = cols[:]
 
     out: List[str] = []
-    out.append(f"<h4 style='margin:16px 0 8px 0;'>{h(title)}</h4>")
+    out.append(f"<h4 style='margin:16px 0 8px 0; text-align:center;'>{h(title)}</h4>")
     out.append("<div style='overflow-x:auto; border:1px solid #e8e8e8; border-radius:10px;'>")
     out.append("<table style='border-collapse:collapse; width:100%; font-size:12.5px;'>")
     out.append("<thead>")
