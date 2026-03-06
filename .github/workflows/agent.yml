@@ -24,7 +24,7 @@ on:
 
 concurrency:
   group: dynasty-agent-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
