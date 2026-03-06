@@ -1,4 +1,3 @@
-
 import os
 import json
 import smtplib
@@ -432,7 +431,7 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
 
         for c in pre_cols:
             out.append(
-                "<th rowspan='2' style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
+                "<th rowspan='2' style='text-align:center; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
                 f"{h(str(c))}</th>"
             )
 
@@ -444,7 +443,7 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
 
         for c in mid_cols:
             out.append(
-                "<th rowspan='2' style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
+                "<th rowspan='2' style='text-align:center; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
                 f"{h(str(c))}</th>"
             )
 
@@ -457,7 +456,7 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
 
         for c in post_cols:
             out.append(
-                "<th rowspan='2' style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
+                "<th rowspan='2' style='text-align:center; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
                 f"{h(str(c))}</th>"
             )
 
@@ -468,7 +467,7 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
         for c in week_cols:
             label = str(c)[2:]
             out.append(
-                "<th style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
+                "<th style='text-align:center; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
                 f"{h(label)}</th>"
             )
 
@@ -476,7 +475,7 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
             label = str(c)[2:]
             lb = divider_css if j == 0 else ""
             out.append(
-                f"<th style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap; {lb}'>"
+                f"<th style='text-align:center; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap; {lb}'>"
                 f"{h(label)}</th>"
             )
 
@@ -485,7 +484,7 @@ def render_table_html(df: pd.DataFrame, title: str, html_cols: Optional[Set[str]
         out.append("<tr style='background:#f6f7f9;'>")
         for c in cols:
             out.append(
-                "<th style='text-align:left; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
+                "<th style='text-align:center; padding:8px 10px; border-bottom:1px solid #e8e8e8; white-space:nowrap;'>"
                 f"{h(str(c))}</th>"
             )
         out.append("</tr>")
