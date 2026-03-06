@@ -127,7 +127,7 @@ jobs:
           echo "Running RUN_MODE=$MODE"
           export RUN_MODE="$MODE"
 
-          timeout 45m python -u agent_updated.py
+          timeout 45m python -u agent.py
 
       - name: Commit state/logs (if changed)
         if: github.event_name == 'schedule'
