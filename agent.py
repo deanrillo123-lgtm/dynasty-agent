@@ -1,3 +1,4 @@
+
 import os
 import json
 import smtplib
@@ -19,6 +20,7 @@ from bs4 import BeautifulSoup  # kept (even if unused) to match your environment
 
 from typing import Optional, List, Dict, Tuple, Set, Any
 
+print("[boot] dynasty agent file loaded", flush=True)
 
 # =========================
 # Config
@@ -114,6 +116,42 @@ def _parse_iso_utc(utc_s: str) -> datetime:
         return datetime.fromisoformat(str(utc_s).replace("Z", "+00:00"))
     except Exception:
         return datetime(1970, 1, 1, tzinfo=tz.tzutc())
+
+
+# =========================
+# Startup / config helpers
+# =========================
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def env_flag(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def validate_env(mode: str) -> None:
+    required = {
+        "EMAIL_ADDRESS": SENDER,
+        "EMAIL_PASSWORD": SENDER_PW,
+        "RECIPIENT_EMAIL": RECIPIENT,
+    }
+
+    if mode in {"daily", "weekly", "daily_realnews_test", "weekly_test", "spring_training_daily", "spring_daily_all"}:
+        required["GSHEET_ID"] = GSHEET_ID
+        required["ROSTER_GID"] = ROSTER_GID
+
+    missing = [k for k, v in required.items() if not str(v).strip()]
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+
+
+def startup_summary(mode: str) -> None:
+    redacted_sender = SENDER[:3] + "***" if SENDER else "<missing>"
+    redacted_recipient = RECIPIENT[:3] + "***" if RECIPIENT else "<missing>"
+    log(f"[startup] mode={mode}")
+    log(f"[startup] sender={redacted_sender} recipient={redacted_recipient}")
+    log(f"[startup] gsheet_id={'set' if GSHEET_ID else 'missing'} roster_gid={'set' if ROSTER_GID else 'missing'} available_gid={'set' if AVAILABLE_GID else 'missing'}")
+    log(f"[startup] is_scheduled={os.getenv('IS_SCHEDULED', '0')} force_run={os.getenv('FORCE_RUN', '0')}")
 
 
 # =========================
@@ -314,6 +352,8 @@ def send_email(subject: str, text_body: str, html_body: str) -> None:
     if not (SENDER and SENDER_PW and RECIPIENT):
         raise RuntimeError("Missing EMAIL_ADDRESS / EMAIL_PASSWORD / RECIPIENT_EMAIL.")
 
+    log(f"[email] preparing subject={subject!r} to={RECIPIENT}")
+
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = f"Dynasty Agent <{SENDER}>"
@@ -322,10 +362,14 @@ def send_email(subject: str, text_body: str, html_body: str) -> None:
     msg.set_content(text_body)
     msg.add_alternative(html_body, subtype="html")
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+        log(f"[email] connecting host={SMTP_HOST} port={SMTP_PORT}")
         server.starttls()
+        log("[email] starttls ok")
         server.login(SENDER, SENDER_PW)
+        log("[email] login ok")
         server.send_message(msg)
+        log("[email] send_message ok")
 
 
 # =========================
@@ -1265,19 +1309,22 @@ def compute_opportunity_signals(items: List[Dict[str, Any]], lookback_days: int 
 # =========================
 # Daily gate & starters
 # =========================
-def is_daily_time(state: Dict[str, Any]) -> bool:
+def is_daily_time(state: Dict[str, Any]) -> Tuple[bool, str]:
     ln = local_now()
     wd = ln.weekday()  # Mon=0 ... Sun=6
 
     if wd in (2, 5, 6):  # Wed, Sat, Sun
         if not (ln.hour == 6 and ln.minute >= 30):
-            return False
+            return False, f"scheduled window mismatch: now={ln.isoformat()} expected Wed/Sat/Sun at 6:30-6:59 {TZ_NAME}"
     else:
         if ln.hour != 6:
-            return False
+            return False, f"scheduled window mismatch: now={ln.isoformat()} expected 6:00-6:59 {TZ_NAME}"
 
     today = ln.strftime("%Y-%m-%d")
-    return state.get("last_daily_local_date") != today
+    if state.get("last_daily_local_date") == today:
+        return False, f"already sent today: {today}"
+
+    return True, "ok"
 
 
 def mark_daily_sent(state: Dict[str, Any]) -> None:
@@ -2561,7 +2608,9 @@ def run_spring_training_daily_allgames() -> None:
         print("[spring] Not in spring training window; skipping.")
         return
 
+    log("[daily] loading roster...")
     roster_df = load_roster()
+    log(f"[daily] roster loaded rows={len(roster_df)}")
     rows = fetch_yesterdays_spring_training_batting_lines(roster_df)
     subj_date = (local_now().date() - timedelta(days=1)).strftime("%b %d")
     subject = f"Spring Training Batting Lines — {subj_date}"
@@ -2574,31 +2623,33 @@ def run_spring_training_daily_allgames() -> None:
 # Daily runner
 # =========================
 def run_daily(lookback_hours: Optional[int] = None) -> None:
+    log("[daily] ENTER run_daily")
     state = load_state()
     removed = scrub_bad_player_cache(state)
     if removed:
-        print(f"[cache] scrubbed {removed} bad entries from player_cache")
+        log(f"[cache] scrubbed {removed} bad entries from player_cache")
         save_state(state)
 
     roster_df = load_roster()
     roster = roster_df["player_name"].tolist()
     year = local_now().year
 
-    print(f"[roster] players={len(roster)} sample={roster[:10]}")
+    log(f"[roster] players={len(roster)} sample={roster[:10]}")
 
-    if os.getenv("IS_SCHEDULED", "0") == "1":
-        if not is_daily_time(state):
-            print("[daily] Skipping - not 6am CT (or already sent).")
+    if env_flag("IS_SCHEDULED") and not env_flag("FORCE_RUN"):
+        ok, reason = is_daily_time(state)
+        if not ok:
+            log(f"[daily] Skipping - {reason}")
             save_state(state)
             return
 
     since = now_utc() - timedelta(hours=lookback_hours or 24)
-    print(f"[daily] since={since.isoformat()}")
+    log(f"[daily] since={since.isoformat()}")
 
     official_items: List[Dict[str, Any]] = []
     for i, player in enumerate(roster):
         if i % 10 == 0:
-            print(f"[daily] tx progress {i}/{len(roster)}")
+            log(f"[daily] tx progress {i}/{len(roster)}")
         pid = lookup_mlbam_id(player, state)
         if not pid:
             continue
@@ -2607,7 +2658,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
             official_items.append({"player": player, "desc": t["desc"], "utc": t["utc"]})
             append_jsonl(WEEKLY_OFFICIAL_PATH, {"player": player, **t})
 
-    print("[daily] starting RSS/news fetch (last 7 days only, de-duped)...")
+    log("[daily] starting RSS/news fetch (last 7 days only, de-duped)...")
     reports = dedupe_reports_semantic(fetch_reports(roster, state, max_age_days=7))
     for r in reports:
         append_jsonl(WEEKLY_REPORTS_PATH, r)
@@ -2639,14 +2690,25 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
             positions_of_need = parse_positions_of_need_from_roster(roster_df)
             mlb_adds_df = compute_major_league_adds(available_df, top500_df, sav_bat, sav_pit, reports, state, year, positions_of_need)
         except Exception as e:
-            print(f"[daily] MLB Adds error: {e}")
+            log(f"[daily] MLB Adds error: {e}")
             mlb_adds_df = pd.DataFrame()
 
-    print(f"[daily] official_items={len(official_items)} reports_items={len(reports)} starters={len(starters)} opp_alerts={len(opp_alerts)} adds_rows={len(mlb_adds_df) if mlb_adds_df is not None else 0}")
+    log(f"[daily] official_items={len(official_items)} reports_items={len(reports)} starters={len(starters)} opp_alerts={len(opp_alerts)} adds_rows={len(mlb_adds_df) if mlb_adds_df is not None else 0}")
 
     any_adds = mlb_adds_df is not None and not mlb_adds_df.empty
     if not official_items and not reports and not starters and not any_adds and not opp_alerts:
-        if os.getenv("IS_SCHEDULED", "0") == "1":
+        log("[daily] no content found; sending empty digest")
+        title_str = local_now().strftime("%b %d")
+        text_body = f"Dynasty Daily Update — {title_str}\n\nNo qualifying items found this morning."
+        html_body = (
+            "<html><body style='font-family:Arial, Helvetica, sans-serif; color:#111;'>"
+            f"<h2>Dynasty Daily Update — {h(title_str)}</h2>"
+            "<div style='color:#666;'>No qualifying items found this morning.</div>"
+            "</body></html>"
+        )
+        send_email(f"Dynasty Daily Update — {title_str}", text_body, html_body)
+
+        if env_flag("IS_SCHEDULED"):
             mark_daily_sent(state)
         save_state(state)
         return
@@ -2663,7 +2725,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
     )
     send_email(f"Dynasty Daily Update — {title_str}", text_body, html_body)
 
-    if os.getenv("IS_SCHEDULED", "0") == "1":
+    if env_flag("IS_SCHEDULED"):
         mark_daily_sent(state)
 
     save_state(state)
@@ -2776,13 +2838,13 @@ def pitcher_row(name, team, level, pos, pid, wk, ss, injury_players, fg_adv=None
 # Weekly runner
 # =========================
 def run_weekly(force: bool = False) -> None:
-    print("[weekly] ENTER run_weekly")
-    print("[weekly] force=", force, "RUN_MODE=", os.getenv("RUN_MODE", ""), "IS_SCHEDULED=", os.getenv("IS_SCHEDULED", ""))
+    log("[weekly] ENTER run_weekly")
+    log(f"[weekly] force={force} RUN_MODE={os.getenv('RUN_MODE', '')} IS_SCHEDULED={os.getenv('IS_SCHEDULED', '')}")
 
     state = load_state()
     removed = scrub_bad_player_cache(state)
     if removed:
-        print(f"[cache] scrubbed {removed} bad entries from player_cache")
+        log(f"[cache] scrubbed {removed} bad entries from player_cache")
         save_state(state)
 
     now_local = local_now()
@@ -2790,12 +2852,12 @@ def run_weekly(force: bool = False) -> None:
 
     if os.getenv("IS_SCHEDULED", "0") == "1" and not force:
         if not should_send_weekly_now():
-            print("[weekly] Skipping - not Monday 7am CT.")
+            log("[weekly] Skipping - not Monday 7am CT.")
             save_state(state)
             return
         today = now_local.strftime("%Y-%m-%d")
         if state.get("last_weekly_local_date") == today:
-            print("[weekly] Already sent today.")
+            log("[weekly] Already sent today.")
             save_state(state)
             return
 
@@ -3180,11 +3242,11 @@ def run_weekly(force: bool = False) -> None:
     html.append("</body></html>")
     html_body = "".join(html)
 
-    print(f"[weekly] about to send email: subject={subject} to={RECIPIENT} from={SENDER}")
+    log(f"[weekly] about to send email: subject={subject} to={RECIPIENT} from={SENDER}")
     send_email(subject, text_body, html_body)
-    print("[weekly] send_email() returned (no exception)")
+    log("[weekly] send_email() returned (no exception)")
 
-    if os.getenv("IS_SCHEDULED", "0") == "1":
+    if env_flag("IS_SCHEDULED"):
         mark_weekly_sent(state)
     save_state(state)
 
@@ -3193,7 +3255,9 @@ def run_weekly(force: bool = False) -> None:
 # Tests / modes
 # =========================
 def run_smtp_test() -> None:
+    log("[test] running smtp test")
     send_email("SMTP Test", "If you received this, SMTP works.", "<b>If you received this, SMTP works.</b>")
+    log("[test] smtp test sent")
 
 
 def run_news_test() -> None:
@@ -3212,9 +3276,12 @@ def run_weekly_test() -> None:
 # Main
 # =========================
 def main() -> None:
+    log("[main] starting")
     ensure_state_files()
     mode = os.getenv("RUN_MODE", "daily").strip()
-    print(f"[main] RUN_MODE={mode}")
+    validate_env(mode)
+    startup_summary(mode)
+    log(f"[main] RUN_MODE={mode}")
 
     if mode == "smtp_test":
         run_smtp_test()
@@ -3235,4 +3302,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        log("[boot] entering __main__")
+        main()
+        log("[boot] main() finished")
+    except Exception as e:
+        import traceback
+        log(f"[fatal] {type(e).__name__}: {e}")
+        traceback.print_exc()
+        raise
+
