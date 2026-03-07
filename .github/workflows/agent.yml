@@ -2,29 +2,39 @@ name: Dynasty Agent
 
 on:
   schedule:
-    # Run hourly; Python gates by America/Chicago time (DST-safe)
-    - cron: "0 * * * *"
+    # DAILY
+    # 6:00 AM Chicago
+    # CST = 12:00 UTC, CDT = 11:00 UTC
+    - cron: "0 11 * * *"
+    - cron: "0 12 * * *"
+
+    # WEEKLY
+    # Monday 7:00 AM Chicago
+    # CST = 13:00 UTC, CDT = 12:00 UTC
+    - cron: "0 12 * * 1"
+    - cron: "0 13 * * 1"
+
+    # SPRING TRAINING
+    # 8:00 AM Chicago
+    # CST = 14:00 UTC, CDT = 13:00 UTC
+    - cron: "0 13 * * *"
+    - cron: "0 14 * * *"
 
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "daily | weekly | spring_daily_all | spring_training_daily | smtp_test | news_test | daily_realnews_test | weekly_test"
+        description: "daily | weekly | spring_daily_all"
         required: true
-        default: "smtp_test"
+        default: "daily"
         type: choice
         options:
-          - smtp_test
-          - news_test
-          - daily_realnews_test
-          - weekly_test
           - daily
           - weekly
           - spring_daily_all
-          - spring_training_daily
 
 concurrency:
   group: dynasty-agent-main
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -50,39 +60,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Decide scheduled RUN_MODE (Chicago time)
+      - name: Decide scheduled RUN_MODE
         if: github.event_name == 'schedule'
         run: |
-          python - << 'PY'
-          from datetime import datetime
-          import pytz
+          SCHEDULE='${{ github.event.schedule }}'
 
-          tz = pytz.timezone("America/Chicago")
-          now = datetime.now(tz)
-          wd = now.weekday()  # Mon=0 ... Sun=6
+          case "$SCHEDULE" in
+            "0 11 * * *"|"0 12 * * *")
+              MODE="daily"
+              ;;
+            "0 12 * * 1"|"0 13 * * 1")
+              MODE="weekly"
+              ;;
+            "0 13 * * *"|"0 14 * * *")
+              MODE="spring_daily_all"
+              ;;
+            *)
+              MODE="noop"
+              ;;
+          esac
 
-          # Daily at 06:00 CT (your script further gates exact minute logic)
-          is_daily_time = (now.hour == 6)
-
-          # Weekly at Mon 07:00 CT
-          is_weekly_time = (wd == 0 and now.hour == 7)
-
-          # Spring Training recap at 08:00 CT (script also gates by season + yesterday games)
-          is_spring_time = (now.hour == 8)
-
-          if is_weekly_time:
-              mode = "weekly"
-          elif is_daily_time:
-              mode = "daily"
-          elif is_spring_time:
-              mode = "spring_daily_all"
-          else:
-              mode = "noop"
-
-          print(f"Selected mode: {mode} @ {now.isoformat()}")
-          with open("run_mode.txt", "w", encoding="utf-8") as f:
-              f.write(mode)
-          PY
+          echo "Selected mode: $MODE from schedule: $SCHEDULE"
+          echo "$MODE" > run_mode.txt
 
       - name: Run (manual)
         if: github.event_name == 'workflow_dispatch'
@@ -102,7 +101,7 @@ jobs:
           IS_SCHEDULED: "0"
         run: python -u agent.py
 
-      - name: Run scheduled (mode selected)
+      - name: Run scheduled
         if: github.event_name == 'schedule'
         env:
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
@@ -120,13 +119,12 @@ jobs:
         run: |
           MODE=$(cat run_mode.txt 2>/dev/null || echo "noop")
           if [ "$MODE" = "noop" ]; then
-            echo "No scheduled work for this hour."
+            echo "No scheduled work."
             exit 0
           fi
 
           echo "Running RUN_MODE=$MODE"
           export RUN_MODE="$MODE"
-
           timeout 45m python -u agent.py
 
       - name: Commit state/logs (if changed)
@@ -147,7 +145,6 @@ jobs:
           git add state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl || true
           git diff --cached --quiet && echo "No state changes to commit" && exit 0
 
-          git commit -m "Update agent state"
-          git fetch origin main
-          git rebase origin/main
+          git commit -m "Update agent state" || exit 0
+          git pull --rebase origin main
           git push origin HEAD:main
