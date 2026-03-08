@@ -103,6 +103,7 @@ jobs:
           DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
           BP_RANK_GID: ${{ secrets.BP_RANK_GID }}
           TOP500_GID: ${{ secrets.TOP500_GID }}
+          TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
 
           RUN_MODE: ${{ inputs.run_mode }}
           IS_SCHEDULED: "0"
