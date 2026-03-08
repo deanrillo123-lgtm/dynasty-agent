@@ -19,7 +19,8 @@ on:
     # CST = 14:00 UTC, CDT = 13:00 UTC
     - cron: "0 13 * * *"
     - cron: "0 14 * * *"
-    workflow_dispatch:
+
+  workflow_dispatch:
     inputs:
       run_mode:
         description: "Select run mode"
