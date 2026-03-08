@@ -94,5 +94,68 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
-          EMAIL_*
-
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+
+          GSHEET_ID: ${{ secrets.GSHEET_ID }}
+          ROSTER_GID: ${{ secrets.ROSTER_GID }}
+          AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
+          DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
+          BP_RANK_GID: ${{ secrets.BP_RANK_GID }}
+          TOP500_GID: ${{ secrets.TOP500_GID }}
+
+          TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+
+          RUN_MODE: ${{ inputs.run_mode }}
+          IS_SCHEDULED: "0"
+        run: python -u agent.py
+
+      - name: Run scheduled
+        if: github.event_name == 'schedule'
+        env:
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+
+          GSHEET_ID: ${{ secrets.GSHEET_ID }}
+          ROSTER_GID: ${{ secrets.ROSTER_GID }}
+          AVAILABLE_GID: ${{ secrets.AVAILABLE_GID }}
+          DD_RANK_GID: ${{ secrets.DD_RANK_GID }}
+          BP_RANK_GID: ${{ secrets.BP_RANK_GID }}
+          TOP500_GID: ${{ secrets.TOP500_GID }}
+
+          TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+
+          IS_SCHEDULED: "1"
+        run: |
+          MODE=$(cat run_mode.txt 2>/dev/null || echo "noop")
+          if [ "$MODE" = "noop" ]; then
+            echo "No scheduled work."
+            exit 0
+          fi
+
+          echo "Running RUN_MODE=$MODE"
+          export RUN_MODE="$MODE"
+          timeout 45m python -u agent.py
+
+      - name: Commit state/logs (if changed)
+        if: github.event_name == 'schedule'
+        run: |
+          MODE=$(cat run_mode.txt 2>/dev/null || echo "noop")
+          if [ "$MODE" = "noop" ]; then
+            echo "Skipping commit on noop."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p state
+          touch state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl
+
+          git add state/state.json state/weekly_official.jsonl state/weekly_reports.jsonl || true
+          git diff --cached --quiet && echo "No state changes to commit" && exit 0
+
+          git commit -m "Update agent state" || exit 0
+          git pull --rebase origin main
+          git push origin HEAD:main
