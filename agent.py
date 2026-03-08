@@ -1240,6 +1240,10 @@ def _story_rank(item: Dict[str, Any]) -> Tuple[int, int, int, float]:
         dt,
     )
 
+    # Test Twitter at startup
+    if os.getenv("RUN_MODE") == "daily":
+        token_valid, token_msg = test_twitter_bearer_token()
+        log(f"[twitter] {token_msg}")
 
 def dedupe_reports_semantic(items: List[Dict[str, Any]], within_days: int = 5) -> List[Dict[str, Any]]:
     if not items:
@@ -2267,6 +2271,11 @@ def compute_prospect_adds(
     if available_df is None or available_df.empty:
         return pd.DataFrame()
 
+    # Test Twitter at startup
+    if os.getenv("RUN_MODE") == "daily":
+        token_valid, token_msg = test_twitter_bearer_token()
+        log(f"[twitter] {token_msg}")
+    
     recent_reports = dedupe_reports_semantic(recent_reports)
 
     cand = available_df.copy()
