@@ -3448,6 +3448,48 @@ def run_daily_realnews_test() -> None:
 def run_weekly_test() -> None:
     run_weekly(force=True)
 
+def run_twitter_test() -> None:
+    """Test Twitter bearer token and fetch sample tweets"""
+    log("[twitter_test] Testing Twitter integration...")
+    
+    token_valid, token_msg = test_twitter_bearer_token()
+    log(f"[twitter_test] {token_msg}")
+    
+    if not token_valid:
+        log("[twitter_test] Twitter token is invalid or not configured. Skipping tweet fetch.")
+        return
+    
+    try:
+        roster_df = load_roster()
+        sample_players = roster_df["player_name"].head(5).tolist()
+        log(f"[twitter_test] Fetching tweets for sample players: {sample_players}")
+        
+        tweets = fetch_tweets_about_players(sample_players, lookback_days=7)
+        log(f"[twitter_test] Found {len(tweets)} tweets")
+        
+        if tweets:
+            for tweet in tweets[:3]:
+                log(f"[twitter_test] @{tweet['author']}: {tweet['summary'][:80]}...")
+        else:
+            log("[twitter_test] No tweets found for sample players")
+    except Exception as e:
+        log(f"[twitter_test] Error during tweet fetch: {e}")
+
+
+def run_daily_twitter_test() -> None:
+    """Run daily realnews test but include Twitter integration"""
+    log("[daily_twitter_test] Testing Twitter first...")
+    run_twitter_test()
+    log("[daily_twitter_test] Now running daily with real news (14 days)...")
+    run_daily(lookback_hours=24 * 14)
+
+
+def run_weekly_twitter_test() -> None:
+    """Run weekly test but include Twitter integration"""
+    log("[weekly_twitter_test] Testing Twitter first...")
+    run_twitter_test()
+    log("[weekly_twitter_test] Now running weekly test...")
+    run_weekly(force=True)
 
 # =========================
 # Main
@@ -3468,6 +3510,12 @@ def main() -> None:
         run_daily_realnews_test()
     elif mode == "weekly_test":
         run_weekly_test()
+    elif mode == "twitter_test":
+        run_twitter_test()
+    elif mode == "daily_twitter_test":
+        run_daily_twitter_test()
+    elif mode == "weekly_twitter_test":
+        run_weekly_twitter_test()
     elif mode in ("spring_training_daily", "spring_daily_all"):
         run_spring_training_daily_allgames()
     elif mode == "daily":
