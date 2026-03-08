@@ -19,11 +19,10 @@ on:
     # CST = 14:00 UTC, CDT = 13:00 UTC
     - cron: "0 13 * * *"
     - cron: "0 14 * * *"
-
-  workflow_dispatch:
+    workflow_dispatch:
     inputs:
       run_mode:
-        description: "daily | weekly | spring_daily_all"
+        description: "Select run mode"
         required: true
         default: "daily"
         type: choice
@@ -31,6 +30,13 @@ on:
           - daily
           - weekly
           - spring_daily_all
+          - smtp_test
+          - news_test
+          - twitter_test
+          - daily_realnews_test
+          - daily_twitter_test
+          - weekly_test
+          - weekly_twitter_test
 
 concurrency:
   group: dynasty-agent-main
