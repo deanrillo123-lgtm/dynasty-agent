@@ -108,7 +108,9 @@ jobs:
 
           RUN_MODE: ${{ inputs.run_mode }}
           IS_SCHEDULED: "0"
-        run: python -u agent.py
+        run: |
+          echo "Token length: ${#TWITTER_BEARER_TOKEN}"
+          python -u agent.py
 
       - name: Run scheduled
         if: github.event_name == 'schedule'
