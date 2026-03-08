@@ -18,6 +18,7 @@ import statsapi
 from pybaseball import batting_stats, pitching_stats
 from bs4 import BeautifulSoup  # kept (even if unused) to match your environment
 
+import tweepy
 from typing import Optional, List, Dict, Tuple, Set, Any
 
 print("[boot] dynasty agent file loaded", flush=True)
@@ -99,6 +100,173 @@ socket.setdefaulttimeout(20)
 SPRING_GAME_TYPE = "S"  # StatsAPI gameType for Spring Training (preseason)
 SPRING_TRAINING_MONTHS = {2, 3, 4}  # Feb–Apr (some games can spill early April)
 
+
+# =========================
+# Twitter/X Integration
+# =========================
+TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "").strip()
+
+TRACKED_TWITTER_ACCOUNTS = [
+    "MLBPipeline", "PitcherList", "BaseballSavant", "FanGraphs",
+    "BaseballProspectus", "louisanalysis", "prospects1500", "heckman_matt115",
+    "pitcherlistplv", "baseballpro", "ibwaa", "brandondim",
+    "jasonrrmartinez", "rotogut", "enosarris", "johnpgh",
+    "downonthefarm", "ericcrossmlb", "prospectlarceny", "geoffpontesba",
+    "the__arrival", "realjranderson", "mike_kurland", "tjstats",
+    "thedynastyguru", "prospectslive", "imaginerybrickwall", "dynastytradeshq",
+    "jeffzimmerman", "derecarty", "baseballamerica", "codifybaseball",
+    "harryknowsball", "fanranked", "rotowire", "homerunapplesauce",
+    "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys",
+    "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay",
+    "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing"
+]
+
+TWITTER_MIN_LIKES = 5
+TWITTER_LOOKBACK_DAYS = 3
+
+
+def test_twitter_bearer_token() -> Tuple[bool, str]:
+    """Test if Twitter bearer token is valid"""
+    if not TWITTER_BEARER_TOKEN:
+        return False, "Bearer token not set in environment (TWITTER_BEARER_TOKEN)"
+    
+    try:
+        client = tweepy.Client(bearer_token=TWITTER_BEARER_TOKEN, wait_on_rate_limit=True)
+        user = client.get_me()
+        return True, f"✅ Token valid! Authenticated as @{user.data.username}"
+    except tweepy.errors.Unauthorized:
+        return False, "❌ Bearer token is INVALID (401 Unauthorized)"
+    except Exception as e:
+        return False, f"❌ Error testing token: {str(e)}"
+
+
+def fetch_tweets_about_players(
+    player_names: List[str], 
+    lookback_days: int = TWITTER_LOOKBACK_DAYS,
+    exclude_cids: Set[str] = None
+) -> List[Dict[str, Any]]:
+    """Fetch tweets from tracked accounts mentioning roster players."""
+    if not TWITTER_BEARER_TOKEN:
+        log("[twitter] Bearer token not configured; skipping tweet fetch")
+        return []
+    
+    if not player_names:
+        return []
+    
+    exclude_cids = exclude_cids or set()
+    
+    try:
+        client = tweepy.Client(bearer_token=TWITTER_BEARER_TOKEN, wait_on_rate_limit=True)
+    except Exception as e:
+        log(f"[twitter] Failed to initialize Tweepy client: {e}")
+        return []
+    
+    tweets_found: List[Dict[str, Any]] = []
+    cutoff = now_utc() - timedelta(days=lookback_days)
+    accounts_query = " OR ".join([f"from:{acc}" for acc in TRACKED_TWITTER_ACCOUNTS])
+    
+    for player_name in player_names:
+        try:
+            query = f'"{player_name}" ({accounts_query}) -is:retweet lang:en'
+            tweets = client.search_recent_tweets(
+                query=query,
+                max_results=10,
+                tweet_fields=['created_at', 'public_metrics', 'author_id'],
+                expansions=['author_id'],
+                user_fields=['username', 'public_metrics'],
+            )
+            
+            if not tweets.data:
+                continue
+            
+            user_map = {}
+            if tweets.includes and 'users' in tweets.includes:
+                for user in tweets.includes['users']:
+                    user_map[user.id] = user.username
+            
+            for tweet in tweets.data:
+                cid = _content_id_stable(tweet.text, f"twitter/{tweet.id}")
+                if cid in exclude_cids:
+                    continue
+                
+                if tweet.created_at and tweet.created_at.replace(tzinfo=tz.tzutc()) < cutoff:
+                    continue
+                
+                likes = tweet.public_metrics.get('like_count', 0) if tweet.public_metrics else 0
+                if likes < TWITTER_MIN_LIKES:
+                    continue
+                
+                author_username = user_map.get(tweet.author_id, "unknown")
+                summary = _summarize_tweet(tweet.text, player_name)
+                
+                tweets_found.append({
+                    "player": player_name,
+                    "text": tweet.text,
+                    "summary": summary,
+                    "url": f"https://twitter.com/{author_username}/status/{tweet.id}",
+                    "author": author_username,
+                    "likes": likes,
+                    "retweets": tweet.public_metrics.get('retweet_count', 0) if tweet.public_metrics else 0,
+                    "created_at": tweet.created_at.isoformat() if tweet.created_at else "",
+                })
+        except Exception as e:
+            log(f"[twitter] Error fetching tweets for {player_name}: {e}")
+            continue
+    
+    tweets_found.sort(key=lambda x: x['likes'], reverse=True)
+    log(f"[twitter] found {len(tweets_found)} tweets")
+    return tweets_found
+
+
+def _summarize_tweet(text: str, player_name: str) -> str:
+    """Create one-sentence summary"""
+    text = re.sub(r'http\S+', '', text)
+    text = re.sub(r'@\w+', '', text)
+    text = re.sub(r'#\w+', '', text)
+    text = re.sub(rf'\b{re.escape(player_name)}\b', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s+', ' ', text).strip()
+    if len(text) > 150:
+        text = text[:147] + "..."
+    return text if text else "Player mention"
+
+
+def build_twitter_section_html(tweets: List[Dict[str, Any]]) -> str:
+    """Build HTML section for tweets"""
+    if not tweets:
+        return ""
+    
+    html: List[str] = []
+    html.append(section_header("Social Media Mentions (Twitter/X)", "#1DA1F2"))
+    
+    by_player: Dict[str, List[Dict[str, Any]]] = {}
+    for tweet in tweets:
+        player = tweet.get("player", "Unknown")
+        by_player.setdefault(player, []).append(tweet)
+    
+    for player in sorted(by_player.keys()):
+        player_tweets = by_player[player]
+        html.append(
+            "<div style='margin:12px 0; padding:12px 14px; border:1px solid #e3f2fd; background:#f0f7ff; border-radius:12px;'>"
+            f"<div style='font-size:16px; margin-bottom:8px;'><b>🐦 {h(player)}</b></div>"
+        )
+        
+        for tweet in player_tweets[:3]:
+            author = tweet.get("author", "unknown")
+            likes = tweet.get("likes", 0)
+            summary = tweet.get("summary", "Player mention")
+            url = tweet.get("url", "")
+            
+            html.append(
+                "<div style='margin:10px 0 0 0; padding-top:10px; border-top:1px solid #b3e5fc;'>"
+                f"<div style='margin:0 0 6px 0; color:#333; font-size:14px;'>{h(summary)}</div>"
+                "<div style='display:flex; gap:10px; align-items:center; flex-wrap:wrap;'>"
+                f"<span style='color:#666; font-size:12px;'>@{h(author)} • {likes} ♥️</span>"
+                f"{button(url, '𝕏 View', bg='#1DA1F2')}"
+                "</div></div>"
+            )
+        html.append("</div>")
+    
+    return "".join(html)
 
 # =========================
 # Time helpers
