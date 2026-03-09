@@ -1500,12 +1500,12 @@ def is_daily_time(state: Dict[str, Any]) -> Tuple[bool, str]:
     ln = local_now()
     wd = ln.weekday()  # Mon=0 ... Sun=6
 
-    if wd in (2, 5, 6):  # Wed, Sat, Sun
-        if not (ln.hour == 6 and ln.minute >= 30):
-            return False, f"scheduled window mismatch: now={ln.isoformat()} expected Wed/Sat/Sun at 6:30-6:59 {TZ_NAME}"
-    else:
-        if ln.hour != 6:
-            return False, f"scheduled window mismatch: now={ln.isoformat()} expected 6:00-6:59 {TZ_NAME}"
+    # Accept hours 5-7 to handle DST ±1 hr shift (cron set to fixed UTC fires
+    # at 6 AM CST during standard time and 7 AM CDT during daylight saving time).
+    if ln.hour not in (5, 6, 7):
+        if wd in (2, 5, 6):
+            return False, f"scheduled window mismatch: now={ln.isoformat()} expected ~6:00-7:59 {TZ_NAME} (Wed/Sat/Sun)"
+        return False, f"scheduled window mismatch: now={ln.isoformat()} expected ~6:00-7:59 {TZ_NAME}"
 
     today = ln.strftime("%Y-%m-%d")
     if state.get("last_daily_local_date") == today:
@@ -1521,10 +1521,8 @@ def mark_daily_sent(state: Dict[str, Any]) -> None:
 def should_include_midweek_adds_now() -> bool:
     ln = local_now()
     wd = ln.weekday()
-    if wd in (2, 5, 6):
-        return ln.hour == 6 and ln.minute >= 30
-    else:
-        return ln.hour == 6
+    # Accept hours 5-7 to handle DST ±1 hr shift
+    return wd in (2, 5, 6) and ln.hour in (5, 6, 7)
 
 
 def _fmt_local_time_safe(dt: datetime) -> str:
@@ -3135,7 +3133,9 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
 # =========================
 def should_send_weekly_now() -> bool:
     ln = local_now()
-    return ln.weekday() == 0 and ln.hour == 7  # Monday 7am CT
+    # Accept hours 6-8 to handle DST ±1 hr shift (cron set to 7 AM CST fires at
+    # 7 AM during standard time and 8 AM during daylight saving time).
+    return ln.weekday() == 0 and ln.hour in (6, 7, 8)  # Monday ~7am CT
 
 
 def mark_weekly_sent(state: Dict[str, Any]) -> None:
