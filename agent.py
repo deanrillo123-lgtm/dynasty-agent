@@ -38,6 +38,7 @@ AVAILABLE_GID = os.getenv("AVAILABLE_GID", "").strip()
 DD_RANK_GID = os.getenv("DD_RANK_GID", "").strip()
 BP_RANK_GID = os.getenv("BP_RANK_GID", "").strip()
 TOP500_GID = os.getenv("TOP500_GID", "").strip()
+DRAFTED_GID = os.getenv("DRAFTED_GID", "").strip()
 
 STATE_DIR = "state"
 STATE_PATH = os.path.join(STATE_DIR, "state.json")
@@ -880,6 +881,24 @@ def load_available_players() -> pd.DataFrame:
     return pd.DataFrame(rows).drop_duplicates(subset=["player_name"]).reset_index(drop=True)
 
 
+def load_drafted_players() -> Set[str]:
+    if not DRAFTED_GID or not GSHEET_ID:
+        return set()
+    try:
+        df = read_sheet_tab_csv(GSHEET_ID, DRAFTED_GID)
+        if df.empty or df.shape[1] < 5:
+            return set()
+        col_e = df.iloc[:, 4]
+        names: Set[str] = set()
+        for raw in col_e:
+            name = _norm_name(str(raw))
+            if name and name.lower() not in ("player", "name", ""):
+                names.add(name)
+        return names
+    except Exception:
+        return set()
+
+
 def load_dynasty_dugout_rankings() -> pd.DataFrame:
     df = read_sheet_tab_csv(GSHEET_ID, DD_RANK_GID)
     name_col = _pick_col(df, ["player", "player_name", "name", "player name"])
@@ -1650,6 +1669,147 @@ def fetch_savant_leaderboard(year: int, which: str, state: Dict[str, Any]) -> pd
         return pd.DataFrame()
 
 
+def _daily_stats_cache_valid(state: Dict[str, Any], key: str) -> bool:
+    entry = state.get("daily_stats_cache", {}).get(key, {})
+    fetched = entry.get("date")
+    return fetched == local_now().strftime("%Y-%m-%d")
+
+
+def _get_daily_stats_cache(state: Dict[str, Any], key: str) -> Optional[Dict[str, Any]]:
+    if _daily_stats_cache_valid(state, key):
+        return state.get("daily_stats_cache", {}).get(key, {}).get("data")
+    return None
+
+
+def _set_daily_stats_cache(state: Dict[str, Any], key: str, data: Dict[str, Any]) -> None:
+    cache = state.setdefault("daily_stats_cache", {})
+    cache[key] = {"date": local_now().strftime("%Y-%m-%d"), "data": data}
+
+
+def fetch_prospect_stats_from_statsapi(pid: int, state: Dict[str, Any], year: int) -> Dict[str, Any]:
+    cache_key = f"prospect_stats_{pid}_{year}"
+    cached = _get_daily_stats_cache(state, cache_key)
+    if cached is not None:
+        return cached
+
+    result: Dict[str, Any] = {}
+    try:
+        hit = statsapi.get("stats", {"group": "hitting", "stats": "season", "sportId": 21, "personIds": str(pid)})
+        splits = hit.get("stats", [])[0].get("splits", []) if hit.get("stats") else []
+        if splits:
+            st = splits[0].get("stat", {}) or {}
+            result["type"] = "hitter"
+            result["avg"] = st.get("avg", "")
+            result["hr"] = st.get("homeRuns", "")
+            result["obp"] = st.get("obp", "")
+            result["slg"] = st.get("slugging", "")
+            result["sb"] = st.get("stolenBases", "")
+            result["pa"] = st.get("plateAppearances", "")
+            result["so"] = st.get("strikeOuts", "")
+            result["bb"] = st.get("baseOnBalls", "")
+            _set_daily_stats_cache(state, cache_key, result)
+            return result
+    except Exception:
+        pass
+
+    try:
+        pit = statsapi.get("stats", {"group": "pitching", "stats": "season", "sportId": 21, "personIds": str(pid)})
+        ps = pit.get("stats", [])[0].get("splits", []) if pit.get("stats") else []
+        if ps:
+            st = ps[0].get("stat", {}) or {}
+            result["type"] = "pitcher"
+            result["era"] = st.get("era", "")
+            result["ip"] = st.get("inningsPitched", "")
+            result["so"] = st.get("strikeOuts", "")
+            result["bb"] = st.get("baseOnBalls", "")
+            result["whip"] = st.get("whip", "")
+            result["bf"] = st.get("battersFaced", "")
+            _set_daily_stats_cache(state, cache_key, result)
+            return result
+    except Exception:
+        pass
+
+    _set_daily_stats_cache(state, cache_key, result)
+    return result
+
+
+def fetch_mlb_player_stats_from_statsapi(pid: int, state: Dict[str, Any], year: int) -> Dict[str, Any]:
+    cache_key = f"mlb_stats_{pid}_{year}"
+    cached = _get_daily_stats_cache(state, cache_key)
+    if cached is not None:
+        return cached
+
+    result: Dict[str, Any] = {}
+    try:
+        hit = statsapi.get("stats", {"group": "hitting", "stats": "season", "sportId": 1, "personIds": str(pid)})
+        splits = hit.get("stats", [])[0].get("splits", []) if hit.get("stats") else []
+        if splits:
+            st = splits[0].get("stat", {}) or {}
+            result["type"] = "hitter"
+            result["avg"] = st.get("avg", "")
+            result["hr"] = st.get("homeRuns", "")
+            result["obp"] = st.get("obp", "")
+            result["slg"] = st.get("slugging", "")
+            result["ab"] = st.get("atBats", "")
+            result["g"] = st.get("gamesPlayed", "")
+            result["so"] = st.get("strikeOuts", "")
+            result["bb"] = st.get("baseOnBalls", "")
+            _set_daily_stats_cache(state, cache_key, result)
+            return result
+    except Exception:
+        pass
+
+    try:
+        pit = statsapi.get("stats", {"group": "pitching", "stats": "season", "sportId": 1, "personIds": str(pid)})
+        ps = pit.get("stats", [])[0].get("splits", []) if pit.get("stats") else []
+        if ps:
+            st = ps[0].get("stat", {}) or {}
+            result["type"] = "pitcher"
+            result["era"] = st.get("era", "")
+            result["ip"] = st.get("inningsPitched", "")
+            result["g"] = st.get("gamesPlayed", "")
+            result["gs"] = st.get("gamesStarted", "")
+            result["so"] = st.get("strikeOuts", "")
+            result["bb"] = st.get("baseOnBalls", "")
+            result["whip"] = st.get("whip", "")
+            _set_daily_stats_cache(state, cache_key, result)
+            return result
+    except Exception:
+        pass
+
+    _set_daily_stats_cache(state, cache_key, result)
+    return result
+
+
+def fetch_savant_advanced_metrics(pid: int, state: Dict[str, Any], year: int) -> Dict[str, Any]:
+    cache_key = f"savant_adv_{pid}_{year}"
+    cached = _get_daily_stats_cache(state, cache_key)
+    if cached is not None:
+        return cached
+
+    result: Dict[str, Any] = {}
+    try:
+        url = (
+            f"https://baseballsavant.mlb.com/statcast_search/csv?"
+            f"type=batter&player_type=batter&year={year}&player_id={pid}&min_pitches=0"
+        )
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        import io
+        df = pd.read_csv(io.StringIO(r.text), dtype=str).fillna("")
+        if not df.empty:
+            row = df.iloc[0]
+            for col in ["xwoba", "xslg", "hard_hit_percent", "barrel_batted_rate", "avg_exit_velocity", "xera"]:
+                val = str(row.get(col, "")).strip()
+                if val:
+                    result[col] = val
+    except Exception:
+        pass
+
+    _set_daily_stats_cache(state, cache_key, result)
+    return result
+
+
 # =========================
 # Stats helpers
 # =========================
@@ -2256,25 +2416,53 @@ def compute_major_league_adds(
 # =========================
 # Prospect adds (display simplified, scoring intact)
 # =========================
+def _age_level_fit_score(age_str: str, level: str) -> float:
+    try:
+        age = int(float(str(age_str or "").strip()))
+    except Exception:
+        return 0.5
+    L = (level or "").upper()
+    if "AAA" in L:
+        if age <= 22:
+            return 1.0
+        if age <= 24:
+            return 0.75
+        return 0.4
+    if "AA" in L:
+        if age <= 21:
+            return 1.0
+        if age <= 23:
+            return 0.75
+        return 0.4
+    if "A" in L:
+        if age <= 20:
+            return 1.0
+        if age <= 22:
+            return 0.65
+        return 0.25
+    return 0.5
+
+
 def compute_prospect_adds(
     available_df: pd.DataFrame,
     dd_df: pd.DataFrame,
     bp_df: pd.DataFrame,
     recent_reports: List[Dict[str, Any]],
     state: Dict[str, Any],
-    year: int
+    year: int,
+    drafted_names: Optional[Set[str]] = None,
 ) -> pd.DataFrame:
     if available_df is None or available_df.empty:
         return pd.DataFrame()
 
-    # Test Twitter at startup
-    if os.getenv("RUN_MODE") == "daily":
-        token_valid, token_msg = test_twitter_bearer_token()
-        log(f"[twitter] {token_msg}")
-    
     recent_reports = dedupe_reports_semantic(recent_reports)
 
     cand = available_df.copy()
+
+    # Filter out drafted players using DRAFTED_GID
+    if drafted_names:
+        cand = cand[~cand["player_name"].isin(drafted_names)].copy()
+
     if dd_df is not None and not dd_df.empty:
         cand = cand.merge(dd_df[["player_name", "dd_rank", "signed_year"]], on="player_name", how="left")
     if bp_df is not None and not bp_df.empty:
@@ -2306,47 +2494,33 @@ def compute_prospect_adds(
     perf_raw = []
     k_pct_list = []
     bb_pct_list = []
+    age_level_fit_list = []
 
     for _, r in cand.iterrows():
         pid = r.get("pid")
+        age_level_fit_list.append(_age_level_fit_score(r.get("age", ""), r.get("Level", "")))
+
         if pd.isna(pid) or pid is None:
             perf_raw.append(0.0)
             k_pct_list.append("")
             bb_pct_list.append("")
             continue
 
-        pid = int(pid)
+        pid_int = int(pid)
         score = 0.0
         k_pct = ""
         bb_pct = ""
 
         try:
-            hit = statsapi.get("stats", {"group": "hitting", "stats": "season", "sportId": 21, "personIds": str(pid)})
-            splits = hit.get("stats", [])[0].get("splits", [])
-            if splits:
-                st = splits[0].get("stat", {}) or {}
-
-                hr = float(st.get("homeRuns", 0) or 0)
-                sb = float(st.get("stolenBases", 0) or 0)
-                obp = st.get("obp")
-                avg = st.get("avg")
-
-                pa = st.get("plateAppearances")
-                so = st.get("strikeOuts")
-                bb = st.get("baseOnBalls")
-
-                try:
-                    pa_f = float(pa or 0)
-                except Exception:
-                    pa_f = 0.0
-                try:
-                    so_f = float(so or 0)
-                except Exception:
-                    so_f = 0.0
-                try:
-                    bb_f = float(bb or 0)
-                except Exception:
-                    bb_f = 0.0
+            stats = fetch_prospect_stats_from_statsapi(pid_int, state, year)
+            if stats.get("type") == "hitter":
+                hr = float(stats.get("hr") or 0)
+                sb = float(stats.get("sb") or 0)
+                obp = stats.get("obp")
+                avg = stats.get("avg")
+                pa_f = float(stats.get("pa") or 0)
+                so_f = float(stats.get("so") or 0)
+                bb_f = float(stats.get("bb") or 0)
 
                 if pa_f > 0:
                     k_pct = f"{(so_f/pa_f)*100:.1f}%"
@@ -2362,33 +2536,23 @@ def compute_prospect_adds(
                 except Exception:
                     pass
 
-            else:
-                pit = statsapi.get("stats", {"group": "pitching", "stats": "season", "sportId": 21, "personIds": str(pid)})
-                ps = pit.get("stats", [])[0].get("splits", [])
-                if ps:
-                    st = ps[0].get("stat", {}) or {}
+            elif stats.get("type") == "pitcher":
+                ip = stats.get("ip")
+                era = stats.get("era")
+                so = float(stats.get("so") or 0)
+                bb = float(stats.get("bb") or 0)
+                bf_f = float(stats.get("bf") or 0)
 
-                    ip = st.get("inningsPitched")
-                    era = st.get("era")
-                    so = float(st.get("strikeOuts", 0) or 0)
-                    bb = float(st.get("baseOnBalls", 0) or 0)
-                    bf = st.get("battersFaced")
+                if bf_f > 0:
+                    k_pct = f"{(so/bf_f)*100:.1f}%"
+                    bb_pct = f"{(bb/bf_f)*100:.1f}%"
 
-                    try:
-                        bf_f = float(bf or 0)
-                    except Exception:
-                        bf_f = 0.0
-                    if bf_f > 0:
-                        k_pct = f"{(so/bf_f)*100:.1f}%"
-                        bb_pct = f"{(bb/bf_f)*100:.1f}%"
-
-                    ipf = innings_to_float(ip) or 0.0
-                    score = ipf*0.5 + so*0.25 - bb*0.1
-                    try:
-                        score += max(0.0, 8.0 - float(era)) * 2.5
-                    except Exception:
-                        pass
-
+                ipf = innings_to_float(ip) or 0.0
+                score = ipf*0.5 + so*0.25 - bb*0.1
+                try:
+                    score += max(0.0, 8.0 - float(era)) * 2.5
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -2399,6 +2563,7 @@ def compute_prospect_adds(
     cand["perf_raw"] = perf_raw
     cand["K%"] = k_pct_list
     cand["BB%"] = bb_pct_list
+    cand["age_level_fit"] = age_level_fit_list
     cand["perf_pct"] = percentile_score(cand["perf_raw"], True).fillna(0)
 
     cand["dd_rank_num"] = pd.to_numeric(cand.get("dd_rank"), errors="coerce")
@@ -2427,7 +2592,8 @@ def compute_prospect_adds(
     cand["opp_7d"] = cand["player_name"].map(opp_hits).fillna(0).astype(int)
     buzz_pct = ((cand["mentions_7d"].clip(upper=5) + cand["opp_7d"].clip(upper=3)) / 8.0).fillna(0)
 
-    cand["Add Score"] = (30*dd_pct + 30*bp_pct + 30*cand["perf_pct"] + 10*buzz_pct).round(1)
+    # Composite score: DD_Rank 25%, BP_Rank 25%, perf 25%, age-level fit 15%, buzz 10%
+    cand["Add Score"] = (25*dd_pct + 25*bp_pct + 25*cand["perf_pct"] + 15*cand["age_level_fit"] + 10*buzz_pct).round(1)
 
     def level_bonus(level: str) -> float:
         L = (level or "").upper()
@@ -2484,12 +2650,13 @@ def compute_prospect_adds(
     out = out[[
         "Name", "Team", "Level", "Age", "Position",
         "dd_rank", "bp_rank",
+        "K%", "BB%",
         "Add Score", "Urgency", "Savant", "B-Ref"
     ]]
 
     out = out.rename(columns={
-        "dd_rank": "Dynasty Dugout",
-        "bp_rank": "Baseball Prospectus",
+        "dd_rank": "DD Rank",
+        "bp_rank": "BP Rank",
     })
 
     def _int_no_decimal(x):
@@ -2501,10 +2668,10 @@ def compute_prospect_adds(
         except Exception:
             return s
 
-    if "Dynasty Dugout" in out.columns:
-        out["Dynasty Dugout"] = out["Dynasty Dugout"].apply(_int_no_decimal)
-    if "Baseball Prospectus" in out.columns:
-        out["Baseball Prospectus"] = out["Baseball Prospectus"].apply(_int_no_decimal)
+    if "DD Rank" in out.columns:
+        out["DD Rank"] = out["DD Rank"].apply(_int_no_decimal)
+    if "BP Rank" in out.columns:
+        out["BP Rank"] = out["BP Rank"].apply(_int_no_decimal)
 
     return out
 
@@ -2512,6 +2679,42 @@ def compute_prospect_adds(
 # =========================
 # Daily email builder
 # =========================
+def build_top_prospect_adds_email(prospect_adds_df: pd.DataFrame) -> Tuple[str, str]:
+    text_lines: List[str] = []
+    html_parts: List[str] = []
+
+    if prospect_adds_df is None or prospect_adds_df.empty:
+        text_lines.append("No prospect add candidates found.")
+        html_parts.append("<div style='color:#666;'>No prospect add candidates found in available pool after filters.</div>")
+    else:
+        text_lines.append("Top Prospect Adds (Top 10)")
+        for _, r in prospect_adds_df.iterrows():
+            text_lines.append(
+                f"- {r.get('Name','')} ({r.get('Team','')}) {r.get('Position','')} | Age {r.get('Age','')} | {r.get('Level','')} | DD:{r.get('DD Rank','')} BP:{r.get('BP Rank','')} | K%:{r.get('K%','')} BB%:{r.get('BB%','')} | Score {r.get('Add Score','')}"
+            )
+        html_parts.append(render_table_html(prospect_adds_df, "Top Prospect Adds (Available) — max 10", html_cols={"Savant", "B-Ref"}))
+
+    return "\n".join(text_lines), "".join(html_parts)
+
+
+def build_top_mlb_adds_email(mlb_adds_df: pd.DataFrame) -> Tuple[str, str]:
+    text_lines: List[str] = []
+    html_parts: List[str] = []
+
+    if mlb_adds_df is None or mlb_adds_df.empty:
+        text_lines.append("No MLB add candidates found.")
+        html_parts.append("<div style='color:#666;'>No MLB add candidates found in available pool (or MLB level couldn't be detected).</div>")
+    else:
+        text_lines.append("Top MLB Adds (Top 10)")
+        for _, r in mlb_adds_df.iterrows():
+            text_lines.append(
+                f"- Urgency {r.get('Urgency','')}: {r.get('Name','')} ({r.get('Team','')}) {r.get('Position','')} — Score {r.get('Add Score','')}"
+            )
+        html_parts.append(render_table_html(mlb_adds_df, "Top MLB Adds (Available) — max 10", html_cols={"Savant"}))
+
+    return "\n".join(text_lines), "".join(html_parts)
+
+
 def build_daily_bodies(
     official_items: List[Dict[str, Any]],
     starters: List[Dict[str, str]],
@@ -2520,6 +2723,7 @@ def build_daily_bodies(
     mlb_adds_df: pd.DataFrame,
     roster_df: pd.DataFrame,
     title_str: str,
+    prospect_adds_df: Optional[pd.DataFrame] = None,
 ) -> Tuple[str, str]:
     team_by_player = dict(zip(roster_df["player_name"].tolist(), roster_df["team_abbrev"].tolist()))
 
@@ -2552,9 +2756,12 @@ def build_daily_bodies(
             text.append(f"- [{a['confidence']}] {hdr}: {a['net']} ({a['source']}) {a['link']}".strip())
 
     if mlb_adds_df is not None and not mlb_adds_df.empty:
-        text.append("\nMajor League Adds (Top 10)")
-        for _, r in mlb_adds_df.iterrows():
-            text.append(f"- Urgency {r.get('Urgency','')}: {r.get('Name','')} ({r.get('Team','')}) {r.get('Position','')} — Score {r.get('Add Score','')}")
+        mlb_text, _ = build_top_mlb_adds_email(mlb_adds_df)
+        text.append(f"\n{mlb_text}")
+
+    if prospect_adds_df is not None and not prospect_adds_df.empty:
+        prospect_text, _ = build_top_prospect_adds_email(prospect_adds_df)
+        text.append(f"\n{prospect_text}")
 
     text.append("\nReports / Quotes")
     if reports:
@@ -2616,8 +2823,14 @@ def build_daily_bodies(
             )
 
     if mlb_adds_df is not None and not mlb_adds_df.empty:
-        html.append(section_header("Major League Adds (Top 10)", "#0b8043"))
-        html.append(render_table_html(mlb_adds_df, "Adds to Consider (Available)", html_cols={"Savant"}))
+        html.append(section_header("Top MLB Adds (Top 10)", "#0b8043"))
+        _, mlb_html = build_top_mlb_adds_email(mlb_adds_df)
+        html.append(mlb_html)
+
+    if prospect_adds_df is not None and not prospect_adds_df.empty:
+        html.append(section_header("Top Prospect Adds (Top 10)", "#5f6368"))
+        _, prospect_html = build_top_prospect_adds_email(prospect_adds_df)
+        html.append(prospect_html)
 
     html.append(section_header("Reports / Quotes", "#5f6368"))
     if reports:
@@ -2853,6 +3066,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
     opp_alerts = opp_alerts[:12]
 
     mlb_adds_df = pd.DataFrame()
+    prospect_adds_df = pd.DataFrame()
     include_adds = (os.getenv("IS_SCHEDULED", "0") == "1" and should_include_midweek_adds_now()) or (os.getenv("RUN_MODE", "") == "daily_realnews_test")
     if include_adds:
         try:
@@ -2866,9 +3080,20 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
             log(f"[daily] MLB Adds error: {e}")
             mlb_adds_df = pd.DataFrame()
 
-    log(f"[daily] official_items={len(official_items)} reports_items={len(reports)} starters={len(starters)} opp_alerts={len(opp_alerts)} adds_rows={len(mlb_adds_df) if mlb_adds_df is not None else 0}")
+        try:
+            available_df = load_available_players()
+            dd_df = load_dynasty_dugout_rankings()
+            bp_df = load_baseball_prospectus_rankings()
+            drafted_names = load_drafted_players()
+            prospect_adds_df = compute_prospect_adds(available_df, dd_df, bp_df, reports, state, year, drafted_names)
+            log(f"[daily] prospect_adds rows={len(prospect_adds_df)}")
+        except Exception as e:
+            log(f"[daily] Prospect Adds error: {e}")
+            prospect_adds_df = pd.DataFrame()
 
-    any_adds = mlb_adds_df is not None and not mlb_adds_df.empty
+    log(f"[daily] official_items={len(official_items)} reports_items={len(reports)} starters={len(starters)} opp_alerts={len(opp_alerts)} mlb_adds_rows={len(mlb_adds_df) if mlb_adds_df is not None else 0} prospect_adds_rows={len(prospect_adds_df) if prospect_adds_df is not None else 0}")
+
+    any_adds = (mlb_adds_df is not None and not mlb_adds_df.empty) or (prospect_adds_df is not None and not prospect_adds_df.empty)
     if not official_items and not reports and not starters and not any_adds and not opp_alerts:
         log("[daily] no content found; sending empty digest")
         title_str = local_now().strftime("%b %d")
@@ -2895,6 +3120,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
         mlb_adds_df,
         roster_df,
         title_str,
+        prospect_adds_df=prospect_adds_df,
     )
     send_email(f"Dynasty Daily Update — {title_str}", text_body, html_body)
 
@@ -3234,7 +3460,8 @@ def run_weekly(force: bool = False) -> None:
     sav_pit = fetch_savant_leaderboard(year, "pitcher", state)
 
     mlb_adds_df = compute_major_league_adds(available_df, top500_df, sav_bat, sav_pit, reports_news, state, year, positions_of_need)
-    prospect_adds_df = compute_prospect_adds(available_df, dd_df, bp_df, reports_news, state, year)
+    drafted_names = load_drafted_players()
+    prospect_adds_df = compute_prospect_adds(available_df, dd_df, bp_df, reports_news, state, year, drafted_names)
 
     filtered_reports = [r for r in reports_news if not (r.get("player") in injury_players and is_injury_text(r.get("title", "")))]
 
