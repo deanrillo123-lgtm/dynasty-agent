@@ -769,8 +769,13 @@ def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
     rows = worksheet.get_all_values()
     if not rows:
         return pd.DataFrame()
-    headers = rows[0]
-    data = rows[1:]
+    # If the first row is blank (e.g. a title/merged-cell row), skip it so that
+    # sheets whose actual column headers live in row 2 are handled correctly.
+    header_idx = 0
+    if not any(str(cell).strip() for cell in rows[0]) and len(rows) > 1:
+        header_idx = 1
+    headers = rows[header_idx]
+    data = rows[header_idx + 1:]
     return pd.DataFrame(data, columns=headers).fillna("")
 
 
@@ -905,11 +910,18 @@ def load_drafted_players() -> Set[str]:
         return set()
     try:
         df = read_sheet_tab_csv(GSHEET_ID, DRAFTED_GID)
-        if df.empty or df.shape[1] < 5:
+        if df.empty:
             return set()
-        col_e = df.iloc[:, 4]
+        # Prefer a named "Player" column; fall back to column E (index 4) if absent.
+        player_col = _pick_col(df, ["player", "player_name", "name", "player name"])
+        if player_col:
+            col = df[player_col]
+        elif df.shape[1] >= 5:
+            col = df.iloc[:, 4]
+        else:
+            return set()
         names: Set[str] = set()
-        for raw in col_e:
+        for raw in col:
             name = _norm_name(str(raw))
             if name and name.lower() not in ("player", "name", ""):
                 names.add(name)
