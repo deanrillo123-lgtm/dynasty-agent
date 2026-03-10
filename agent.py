@@ -748,12 +748,11 @@ def baseball_reference_search_url(player_name: str) -> str:
 # =========================
 # Google Sheets
 # =========================
-def _gsheet_csv_url(sheet_id: str, gid: str) -> str:
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
-
-
-def _read_sheet_tab_via_api(sheet_id: str, gid: str) -> pd.DataFrame:
-    """Read a Google Sheets tab using the Sheets API with service account credentials."""
+def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
+    if not sheet_id or not gid:
+        raise ValueError("Missing GSHEET_ID or tab gid.")
+    if not GOOGLE_SHEETS_CREDENTIALS:
+        raise ValueError("GOOGLE_SHEETS_CREDENTIALS must be set.")
     creds_info = json.loads(GOOGLE_SHEETS_CREDENTIALS)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -773,18 +772,6 @@ def _read_sheet_tab_via_api(sheet_id: str, gid: str) -> pd.DataFrame:
     headers = rows[0]
     data = rows[1:]
     return pd.DataFrame(data, columns=headers).fillna("")
-
-
-def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
-    if not sheet_id or not gid:
-        raise ValueError("Missing GSHEET_ID or tab gid.")
-    if GOOGLE_SHEETS_CREDENTIALS:
-        try:
-            return _read_sheet_tab_via_api(sheet_id, gid)
-        except Exception as e:
-            log(f"[sheets] API read failed ({e}); falling back to CSV export URL")
-    url = _gsheet_csv_url(sheet_id, gid)
-    return pd.read_csv(url, dtype=str).fillna("")
 
 
 def _pick_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
