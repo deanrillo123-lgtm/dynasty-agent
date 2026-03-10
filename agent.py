@@ -748,6 +748,17 @@ def baseball_reference_search_url(player_name: str) -> str:
 # =========================
 # Google Sheets
 # =========================
+# Keywords used to detect the header row in read_sheet_tab_csv.
+_SHEET_HEADER_KEYWORDS = {
+    "player", "player_name", "player name", "name",
+    "team", "team_abbrev", "org", "organization",
+    "position", "pos",
+    "age",
+    "rank", "ranking",
+    "signed", "signed_year",
+}
+
+
 def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
     if not sheet_id or not gid:
         raise ValueError("Missing GSHEET_ID or tab gid.")
@@ -769,11 +780,15 @@ def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
     rows = worksheet.get_all_values()
     if not rows:
         return pd.DataFrame()
-    # If the first row is blank (e.g. a title/merged-cell row), skip it so that
-    # sheets whose actual column headers live in row 2 are handled correctly.
+    # Find the first row (within the first 5) that looks like a header row.
+    # A row is considered a header when at least one cell matches a known column
+    # keyword. This handles sheets where row 1 is a blank or non-blank title row
+    # and the actual column headers (e.g. "Player" in column C) live in row 2.
     header_idx = 0
-    if not any(str(cell).strip() for cell in rows[0]) and len(rows) > 1:
-        header_idx = 1
+    for i, row in enumerate(rows[:5]):
+        if any(str(cell).strip().lower() in _SHEET_HEADER_KEYWORDS for cell in row):
+            header_idx = i
+            break
     headers = rows[header_idx]
     data = rows[header_idx + 1:]
     return pd.DataFrame(data, columns=headers).fillna("")
