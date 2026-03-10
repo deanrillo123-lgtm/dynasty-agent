@@ -19,6 +19,8 @@ from pybaseball import batting_stats, pitching_stats
 from bs4 import BeautifulSoup  # kept (even if unused) to match your environment
 
 import tweepy
+import gspread
+from google.oauth2.service_account import Credentials as _ServiceAccountCredentials
 from typing import Optional, List, Dict, Tuple, Set, Any
 
 print("[boot] dynasty agent file loaded", flush=True)
@@ -39,6 +41,7 @@ DD_RANK_GID = os.getenv("DD_RANK_GID", "").strip()
 BP_RANK_GID = os.getenv("BP_RANK_GID", "").strip()
 TOP500_GID = os.getenv("TOP500_GID", "").strip()
 DRAFTED_GID = os.getenv("DRAFTED_GID", "").strip()
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
 
 STATE_DIR = "state"
 STATE_PATH = os.path.join(STATE_DIR, "state.json")
@@ -320,6 +323,7 @@ def startup_summary(mode: str) -> None:
     log(f"[startup] mode={mode}")
     log(f"[startup] sender={redacted_sender} recipient={redacted_recipient}")
     log(f"[startup] gsheet_id={'set' if GSHEET_ID else 'missing'} roster_gid={'set' if ROSTER_GID else 'missing'} available_gid={'set' if AVAILABLE_GID else 'missing'}")
+    log(f"[startup] google_credentials={'set (API mode)' if GOOGLE_CREDENTIALS_JSON else 'not set (CSV export mode)'}")
     log(f"[startup] is_scheduled={os.getenv('IS_SCHEDULED', '0')} force_run={os.getenv('FORCE_RUN', '0')}")
 
 
@@ -748,9 +752,37 @@ def _gsheet_csv_url(sheet_id: str, gid: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
 
 
+def _read_sheet_tab_via_api(sheet_id: str, gid: str) -> pd.DataFrame:
+    """Read a Google Sheets tab using the Sheets API with service account credentials."""
+    creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+    creds = _ServiceAccountCredentials.from_service_account_info(creds_info, scopes=scopes)
+    gc = gspread.authorize(creds)
+
+    spreadsheet = gc.open_by_key(sheet_id)
+    worksheet = spreadsheet.get_worksheet_by_id(int(gid))
+    if worksheet is None:
+        raise ValueError(f"No worksheet with gid={gid} found in spreadsheet {sheet_id}.")
+
+    rows = worksheet.get_all_values()
+    if not rows:
+        return pd.DataFrame()
+    headers = rows[0]
+    data = rows[1:]
+    return pd.DataFrame(data, columns=headers).fillna("")
+
+
 def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
     if not sheet_id or not gid:
         raise ValueError("Missing GSHEET_ID or tab gid.")
+    if GOOGLE_CREDENTIALS_JSON:
+        try:
+            return _read_sheet_tab_via_api(sheet_id, gid)
+        except Exception as e:
+            log(f"[sheets] API read failed ({e}); falling back to CSV export URL")
     url = _gsheet_csv_url(sheet_id, gid)
     return pd.read_csv(url, dtype=str).fillna("")
 
