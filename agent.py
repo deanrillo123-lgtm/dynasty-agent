@@ -748,12 +748,22 @@ def baseball_reference_search_url(player_name: str) -> str:
 # =========================
 # Google Sheets
 # =========================
-def _gsheet_csv_url(sheet_id: str, gid: str) -> str:
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+# Keywords used to detect the header row in read_sheet_tab_csv.
+_SHEET_HEADER_KEYWORDS = {
+    "player", "player_name", "player name", "name",
+    "team", "team_abbrev", "org", "organization",
+    "position", "pos",
+    "age",
+    "rank", "ranking",
+    "signed", "signed_year",
+}
 
 
-def _read_sheet_tab_via_api(sheet_id: str, gid: str) -> pd.DataFrame:
-    """Read a Google Sheets tab using the Sheets API with service account credentials."""
+def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
+    if not sheet_id or not gid:
+        raise ValueError("Missing GSHEET_ID or tab gid.")
+    if not GOOGLE_SHEETS_CREDENTIALS:
+        raise ValueError("GOOGLE_SHEETS_CREDENTIALS must be set.")
     creds_info = json.loads(GOOGLE_SHEETS_CREDENTIALS)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -770,21 +780,18 @@ def _read_sheet_tab_via_api(sheet_id: str, gid: str) -> pd.DataFrame:
     rows = worksheet.get_all_values()
     if not rows:
         return pd.DataFrame()
-    headers = rows[0]
-    data = rows[1:]
+    # Find the first row (within the first 5) that looks like a header row.
+    # A row is considered a header when at least one cell matches a known column
+    # keyword. This handles sheets where row 1 is a blank or non-blank title row
+    # and the actual column headers (e.g. "Player" in column C) live in row 2.
+    header_idx = 0
+    for i, row in enumerate(rows[:5]):
+        if any(str(cell).strip().lower() in _SHEET_HEADER_KEYWORDS for cell in row):
+            header_idx = i
+            break
+    headers = rows[header_idx]
+    data = rows[header_idx + 1:]
     return pd.DataFrame(data, columns=headers).fillna("")
-
-
-def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
-    if not sheet_id or not gid:
-        raise ValueError("Missing GSHEET_ID or tab gid.")
-    if GOOGLE_SHEETS_CREDENTIALS:
-        try:
-            return _read_sheet_tab_via_api(sheet_id, gid)
-        except Exception as e:
-            log(f"[sheets] API read failed ({e}); falling back to CSV export URL")
-    url = _gsheet_csv_url(sheet_id, gid)
-    return pd.read_csv(url, dtype=str).fillna("")
 
 
 def _pick_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
@@ -918,11 +925,18 @@ def load_drafted_players() -> Set[str]:
         return set()
     try:
         df = read_sheet_tab_csv(GSHEET_ID, DRAFTED_GID)
-        if df.empty or df.shape[1] < 5:
+        if df.empty:
             return set()
-        col_e = df.iloc[:, 4]
+        # Prefer a named "Player" column; fall back to column E (index 4) if absent.
+        player_col = _pick_col(df, ["player", "player_name", "name", "player name"])
+        if player_col:
+            col = df[player_col]
+        elif df.shape[1] >= 5:
+            col = df.iloc[:, 4]
+        else:
+            return set()
         names: Set[str] = set()
-        for raw in col_e:
+        for raw in col:
             name = _norm_name(str(raw))
             if name and name.lower() not in ("player", "name", ""):
                 names.add(name)

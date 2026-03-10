@@ -6,11 +6,9 @@ A GitHub Actions–based fantasy baseball agent that reads your dynasty league d
 
 ## Google Sheets Setup
 
-The agent reads your roster and player data from Google Sheets.  There are two ways to connect:
+The agent reads your roster and player data from Google Sheets using the Google Sheets API via a service account. `GOOGLE_SHEETS_CREDENTIALS` must be configured as a GitHub Actions secret.
 
-### Option A — Google Sheets API (recommended, works with private sheets)
-
-Use this option when your sheet is **not** publicly shared, or when you want a more reliable connection that doesn't rely on public CSV exports.
+### Google Sheets API setup
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/) and open (or create) a project.
 2. Enable the **Google Sheets API** and **Google Drive API** for the project.
@@ -20,12 +18,6 @@ Use this option when your sheet is **not** publicly shared, or when you want a m
 6. Add the **entire contents** of the downloaded JSON key file as a GitHub secret named `GOOGLE_SHEETS_CREDENTIALS`.
    - In GitHub: *Settings → Secrets and variables → Actions → New repository secret*
    - Paste the full JSON text (it starts with `{` and ends with `}`) as the secret value.
-
-When `GOOGLE_SHEETS_CREDENTIALS` is set the agent automatically uses the Sheets API.
-
-### Option B — Public CSV export (no credentials required)
-
-If your Google Sheet is set to **"Anyone with the link can view"**, you can skip the service account setup entirely.  Leave `GOOGLE_SHEETS_CREDENTIALS` empty and the agent will fall back to the public CSV export URL.
 
 ---
 
@@ -43,7 +35,7 @@ If your Google Sheet is set to **"Anyone with the link can view"**, you can skip
 | `BP_RANK_GID` | Tab GID for Baseball Prospectus rankings |
 | `TOP500_GID` | Tab GID for Top 500 dynasty rankings |
 | `DRAFTED_GID` | Tab GID listing drafted players (Column E) |
-| `GOOGLE_SHEETS_CREDENTIALS` | *(Optional)* Service account JSON key for private sheets |
+| `GOOGLE_SHEETS_CREDENTIALS` | Service account JSON key (required) |
 | `TWITTER_BEARER_TOKEN` | *(Optional)* Twitter/X API bearer token |
 
 ---
