@@ -768,10 +768,10 @@ def _read_sheet_tab_via_api(sheet_id: str, gid: str) -> pd.DataFrame:
         raise ValueError(f"No worksheet with gid={gid} found in spreadsheet {sheet_id}.")
 
     rows = worksheet.get_all_values()
-    if not rows:
+    if len(rows) < 2:
         return pd.DataFrame()
-    headers = rows[0]
-    data = rows[1:]
+    headers = rows[1]
+    data = rows[2:]
     return pd.DataFrame(data, columns=headers).fillna("")
 
 
@@ -784,7 +784,8 @@ def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
         except Exception as e:
             log(f"[sheets] API read failed ({e}); falling back to CSV export URL")
     url = _gsheet_csv_url(sheet_id, gid)
-    return pd.read_csv(url, dtype=str).fillna("")
+    # Row 1 is a title/metadata row; row 2 contains actual column headers.
+    return pd.read_csv(url, skiprows=1, dtype=str).fillna("")
 
 
 def _pick_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
