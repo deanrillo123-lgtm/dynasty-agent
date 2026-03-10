@@ -41,7 +41,7 @@ DD_RANK_GID = os.getenv("DD_RANK_GID", "").strip()
 BP_RANK_GID = os.getenv("BP_RANK_GID", "").strip()
 TOP500_GID = os.getenv("TOP500_GID", "").strip()
 DRAFTED_GID = os.getenv("DRAFTED_GID", "").strip()
-GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
+GOOGLE_SHEETS_CREDENTIALS = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "").strip()
 
 STATE_DIR = "state"
 STATE_PATH = os.path.join(STATE_DIR, "state.json")
@@ -323,7 +323,7 @@ def startup_summary(mode: str) -> None:
     log(f"[startup] mode={mode}")
     log(f"[startup] sender={redacted_sender} recipient={redacted_recipient}")
     log(f"[startup] gsheet_id={'set' if GSHEET_ID else 'missing'} roster_gid={'set' if ROSTER_GID else 'missing'} available_gid={'set' if AVAILABLE_GID else 'missing'}")
-    log(f"[startup] google_credentials={'set (API mode)' if GOOGLE_CREDENTIALS_JSON else 'not set (CSV export mode)'}")
+    log(f"[startup] google_credentials={'set (API mode)' if GOOGLE_SHEETS_CREDENTIALS else 'not set (CSV export mode)'}")
     log(f"[startup] is_scheduled={os.getenv('IS_SCHEDULED', '0')} force_run={os.getenv('FORCE_RUN', '0')}")
 
 
@@ -754,7 +754,7 @@ def _gsheet_csv_url(sheet_id: str, gid: str) -> str:
 
 def _read_sheet_tab_via_api(sheet_id: str, gid: str) -> pd.DataFrame:
     """Read a Google Sheets tab using the Sheets API with service account credentials."""
-    creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
+    creds_info = json.loads(GOOGLE_SHEETS_CREDENTIALS)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly",
@@ -778,7 +778,7 @@ def _read_sheet_tab_via_api(sheet_id: str, gid: str) -> pd.DataFrame:
 def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
     if not sheet_id or not gid:
         raise ValueError("Missing GSHEET_ID or tab gid.")
-    if GOOGLE_CREDENTIALS_JSON:
+    if GOOGLE_SHEETS_CREDENTIALS:
         try:
             return _read_sheet_tab_via_api(sheet_id, gid)
         except Exception as e:
