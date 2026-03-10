@@ -17,15 +17,15 @@ Use this option when your sheet is **not** publicly shared, or when you want a m
 3. Go to **IAM & Admin → Service Accounts** and create a new service account.
 4. Under the service account, go to **Keys → Add Key → Create new key → JSON** and download the file.
 5. Open your Google Sheet and share it with the service account's email address (e.g. `my-agent@my-project.iam.gserviceaccount.com`) with at least **Viewer** access.
-6. Add the **entire contents** of the downloaded JSON key file as a GitHub secret named `GOOGLE_CREDENTIALS_JSON`.
+6. Add the **entire contents** of the downloaded JSON key file as a GitHub secret named `GOOGLE_SHEETS_CREDENTIALS`.
    - In GitHub: *Settings → Secrets and variables → Actions → New repository secret*
    - Paste the full JSON text (it starts with `{` and ends with `}`) as the secret value.
 
-When `GOOGLE_CREDENTIALS_JSON` is set the agent automatically uses the Sheets API.
+When `GOOGLE_SHEETS_CREDENTIALS` is set the agent automatically uses the Sheets API.
 
 ### Option B — Public CSV export (no credentials required)
 
-If your Google Sheet is set to **"Anyone with the link can view"**, you can skip the service account setup entirely.  Leave `GOOGLE_CREDENTIALS_JSON` empty and the agent will fall back to the public CSV export URL.
+If your Google Sheet is set to **"Anyone with the link can view"**, you can skip the service account setup entirely.  Leave `GOOGLE_SHEETS_CREDENTIALS` empty and the agent will fall back to the public CSV export URL.
 
 ---
 
@@ -43,7 +43,7 @@ If your Google Sheet is set to **"Anyone with the link can view"**, you can skip
 | `BP_RANK_GID` | Tab GID for Baseball Prospectus rankings |
 | `TOP500_GID` | Tab GID for Top 500 dynasty rankings |
 | `DRAFTED_GID` | Tab GID listing drafted players (Column E) |
-| `GOOGLE_CREDENTIALS_JSON` | *(Optional)* Service account JSON key for private sheets |
+| `GOOGLE_SHEETS_CREDENTIALS` | *(Optional)* Service account JSON key for private sheets |
 | `TWITTER_BEARER_TOKEN` | *(Optional)* Twitter/X API bearer token |
 
 ---
