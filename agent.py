@@ -125,7 +125,7 @@ TRACKED_TWITTER_ACCOUNTS = [
     "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing"
 ]
 
-TWITTER_MIN_LIKES = 2
+TWITTER_MIN_LIKES = 0
 TWITTER_LOOKBACK_DAYS = 5
 
 
@@ -198,6 +198,7 @@ def fetch_tweets_about_players(
                 
                 likes = tweet.public_metrics.get('like_count', 0) if tweet.public_metrics else 0
                 if likes < TWITTER_MIN_LIKES:
+                    log(f"[twitter] filtered tweet by likes ({likes} < {TWITTER_MIN_LIKES}): {tweet.text[:60]!r}")
                     continue
                 
                 author_username = user_map.get(tweet.author_id, "unknown")
@@ -1141,7 +1142,17 @@ def _content_id_stable(title: str, link: str) -> str:
 
 
 def _build_name_patterns(names: List[str]):
-    return [(name, re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)) for name in names]
+    patterns = []
+    for name in names:
+        # Escape each word individually and join with a flexible separator
+        # that accepts spaces or hyphens (e.g., "Nolan McLean" matches "Nolan-McLean")
+        parts = [re.escape(p) for p in name.split()]
+        flex = r'[-\s]+'.join(parts)
+        # Use negative lookbehind/lookahead instead of \b so hyphens are treated as
+        # valid boundaries.  Also allow a possessive suffix ("McLean's", "McLean'").
+        pat = re.compile(rf"(?<!\w){flex}(?:'s?)?(?!\w)", re.IGNORECASE)
+        patterns.append((name, pat))
+    return patterns
 
 
 def _google_news_url(query: str) -> str:
@@ -1411,8 +1422,10 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
                 "depth chart",
             ]
             if any(p in title_l for p in bad_title_phrases):
+                log(f"[fetch_reports] filtered by title phrase: {title!r}")
                 continue
             if "/player/" in link_l and ("news" not in link_l) and ("article" not in link_l):
+                log(f"[fetch_reports] filtered by URL pattern (/player/ without news/article): {link!r}")
                 continue
 
             cid = _content_id_stable(title, link)
@@ -2755,6 +2768,7 @@ def build_daily_bodies(
     roster_df: pd.DataFrame,
     title_str: str,
     prospect_adds_df: Optional[pd.DataFrame] = None,
+    tweets: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, str]:
     team_by_player = dict(zip(roster_df["player_name"].tolist(), roster_df["team_abbrev"].tolist()))
 
@@ -2793,6 +2807,11 @@ def build_daily_bodies(
     if prospect_adds_df is not None and not prospect_adds_df.empty:
         prospect_text, _ = build_top_prospect_adds_email(prospect_adds_df)
         text.append(f"\n{prospect_text}")
+
+    if tweets:
+        text.append("\nSocial Media Mentions (Twitter/X)")
+        for tw in tweets:
+            text.append(f"- @{tw.get('author','')}: {tw.get('summary','')}")
 
     text.append("\nReports / Quotes")
     if reports:
@@ -2887,6 +2906,9 @@ def build_daily_bodies(
             html.append("</div>")
     else:
         html.append("<div style='color:#666;'>No matched reports.</div>")
+
+    if tweets:
+        html.append(build_twitter_section_html(tweets))
 
     html.append("</body></html>")
     return text_body, "".join(html)
@@ -3124,6 +3146,13 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
 
     log(f"[daily] official_items={len(official_items)} reports_items={len(reports)} starters={len(starters)} opp_alerts={len(opp_alerts)} mlb_adds_rows={len(mlb_adds_df) if mlb_adds_df is not None else 0} prospect_adds_rows={len(prospect_adds_df) if prospect_adds_df is not None else 0}")
 
+    tweets: List[Dict[str, Any]] = []
+    try:
+        tweets = fetch_tweets_about_players(roster)
+        log(f"[daily] tweets fetched={len(tweets)}")
+    except Exception as e:
+        log(f"[daily] Twitter fetch error: {e}")
+
     any_adds = (mlb_adds_df is not None and not mlb_adds_df.empty) or (prospect_adds_df is not None and not prospect_adds_df.empty)
     if not official_items and not reports and not starters and not any_adds and not opp_alerts:
         log("[daily] no content found; sending empty digest")
@@ -3152,6 +3181,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
         roster_df,
         title_str,
         prospect_adds_df=prospect_adds_df,
+        tweets=tweets,
     )
     send_email(f"Dynasty Daily Update — {title_str}", text_body, html_body)
 
@@ -3495,6 +3525,13 @@ def run_weekly(force: bool = False) -> None:
     mlb_adds_df = compute_major_league_adds(available_df, top500_df, sav_bat, sav_pit, reports_news, state, year, positions_of_need)
     drafted_names = load_drafted_players()
     prospect_adds_df = compute_prospect_adds(available_df, dd_df, bp_df, reports_news, state, year, drafted_names)
+
+    weekly_tweets: List[Dict[str, Any]] = []
+    try:
+        weekly_tweets = fetch_tweets_about_players(roster_names)
+        log(f"[weekly] tweets fetched={len(weekly_tweets)}")
+    except Exception as e:
+        log(f"[weekly] Twitter fetch error: {e}")
 
     filtered_reports = [r for r in reports_news if not (r.get("player") in injury_players and is_injury_text(r.get("title", "")))]
 
