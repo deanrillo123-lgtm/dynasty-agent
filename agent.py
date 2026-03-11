@@ -125,7 +125,7 @@ TRACKED_TWITTER_ACCOUNTS = [
     "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing"
 ]
 
-TWITTER_MIN_LIKES = 2
+TWITTER_MIN_LIKES = 0
 TWITTER_LOOKBACK_DAYS = 5
 
 
@@ -198,6 +198,7 @@ def fetch_tweets_about_players(
                 
                 likes = tweet.public_metrics.get('like_count', 0) if tweet.public_metrics else 0
                 if likes < TWITTER_MIN_LIKES:
+                    log(f"[twitter] filtered tweet by likes ({likes} < {TWITTER_MIN_LIKES}): {tweet.text[:60]!r}")
                     continue
                 
                 author_username = user_map.get(tweet.author_id, "unknown")
@@ -1141,7 +1142,18 @@ def _content_id_stable(title: str, link: str) -> str:
 
 
 def _build_name_patterns(names: List[str]):
-    return [(name, re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)) for name in names]
+    patterns = []
+    for name in names:
+        # Escape each word individually and join with a flexible separator
+        # that accepts spaces, hyphens, or no separator at all
+        # (e.g., "Nolan McLean" matches "Nolan-McLean" and "NolanMcLean")
+        parts = [re.escape(p) for p in name.split()]
+        flex = r'[-\s]*'.join(parts)
+        # Use negative lookbehind/lookahead instead of \b so hyphens are treated as
+        # valid boundaries.  Also allow a possessive suffix ("McLean's").
+        pat = re.compile(rf"(?<!\w){flex}(?:'s)?(?!\w)", re.IGNORECASE)
+        patterns.append((name, pat))
+    return patterns
 
 
 def _google_news_url(query: str) -> str:
@@ -1411,8 +1423,10 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
                 "depth chart",
             ]
             if any(p in title_l for p in bad_title_phrases):
+                log(f"[fetch_reports] filtered by title phrase: {title!r}")
                 continue
             if "/player/" in link_l and ("news" not in link_l) and ("article" not in link_l):
+                log(f"[fetch_reports] filtered by URL pattern (/player/ without news/article): {link!r}")
                 continue
 
             cid = _content_id_stable(title, link)
@@ -1735,6 +1749,8 @@ def fetch_prospect_stats_from_statsapi(pid: int, state: Dict[str, Any], year: in
             result["obp"] = st.get("obp", "")
             result["slg"] = st.get("slugging", "")
             result["sb"] = st.get("stolenBases", "")
+            result["rbi"] = st.get("rbi", "")
+            result["g"] = st.get("gamesPlayed", "")
             result["pa"] = st.get("plateAppearances", "")
             result["so"] = st.get("strikeOuts", "")
             result["bb"] = st.get("baseOnBalls", "")
@@ -2522,154 +2538,63 @@ def compute_prospect_adds(
     if cand.empty:
         return pd.DataFrame()
 
-    perf_raw = []
-    k_pct_list = []
-    bb_pct_list = []
-    age_level_fit_list = []
-
-    for _, r in cand.iterrows():
-        pid = r.get("pid")
-        age_level_fit_list.append(_age_level_fit_score(r.get("age", ""), r.get("Level", "")))
-
-        if pd.isna(pid) or pid is None:
-            perf_raw.append(0.0)
-            k_pct_list.append("")
-            bb_pct_list.append("")
-            continue
-
-        pid_int = int(pid)
-        score = 0.0
-        k_pct = ""
-        bb_pct = ""
-
-        try:
-            stats = fetch_prospect_stats_from_statsapi(pid_int, state, year)
-            if stats.get("type") == "hitter":
-                hr = float(stats.get("hr") or 0)
-                sb = float(stats.get("sb") or 0)
-                obp = stats.get("obp")
-                avg = stats.get("avg")
-                pa_f = float(stats.get("pa") or 0)
-                so_f = float(stats.get("so") or 0)
-                bb_f = float(stats.get("bb") or 0)
-
-                if pa_f > 0:
-                    k_pct = f"{(so_f/pa_f)*100:.1f}%"
-                    bb_pct = f"{(bb_f/pa_f)*100:.1f}%"
-
-                score = hr*1.5 + sb*1.2
-                try:
-                    score += float(obp or 0) * 10
-                except Exception:
-                    pass
-                try:
-                    score += float(avg or 0) * 8
-                except Exception:
-                    pass
-
-            elif stats.get("type") == "pitcher":
-                ip = stats.get("ip")
-                era = stats.get("era")
-                so = float(stats.get("so") or 0)
-                bb = float(stats.get("bb") or 0)
-                bf_f = float(stats.get("bf") or 0)
-
-                if bf_f > 0:
-                    k_pct = f"{(so/bf_f)*100:.1f}%"
-                    bb_pct = f"{(bb/bf_f)*100:.1f}%"
-
-                ipf = innings_to_float(ip) or 0.0
-                score = ipf*0.5 + so*0.25 - bb*0.1
-                try:
-                    score += max(0.0, 8.0 - float(era)) * 2.5
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        perf_raw.append(score)
-        k_pct_list.append(k_pct)
-        bb_pct_list.append(bb_pct)
-
-    cand["perf_raw"] = perf_raw
-    cand["K%"] = k_pct_list
-    cand["BB%"] = bb_pct_list
-    cand["age_level_fit"] = age_level_fit_list
-    cand["perf_pct"] = percentile_score(cand["perf_raw"], True).fillna(0)
-
+    # Primary sort key: dd_rank (lower number = better prospect).
+    # Players without a dd_rank are pushed to the end.
     cand["dd_rank_num"] = pd.to_numeric(cand.get("dd_rank"), errors="coerce")
     cand["bp_rank_num"] = pd.to_numeric(cand.get("bp_rank"), errors="coerce")
-    dd_pct = percentile_score(cand["dd_rank_num"], higher_is_better=False).fillna(0)
-    bp_pct = percentile_score(cand["bp_rank_num"], higher_is_better=False).fillna(0)
 
-    cutoff = now_utc() - timedelta(days=7)
-    mentions = {}
-    opp_hits = {}
-    for it in recent_reports:
-        try:
-            utc = datetime.fromisoformat(it.get("utc","").replace("Z","+00:00"))
-        except Exception:
+    # Sort by DD Rank ascending (NaN last), then BP Rank as tiebreaker
+    cand_sorted = cand.sort_values(
+        ["dd_rank_num", "bp_rank_num"],
+        ascending=[True, True],
+        na_position="last",
+    ).head(10).copy()
+
+    # Fetch season stats for each player.
+    # Use current year; fall back to previous year if no games found yet.
+    avgs, hrs, rbis, sbs, obps, k_pcts, bb_pcts, stat_years = [], [], [], [], [], [], [], []
+    for _, r in cand_sorted.iterrows():
+        pid = r.get("pid")
+        if pd.isna(pid) or pid is None:
+            avgs.append(""); hrs.append(""); rbis.append(""); sbs.append("")
+            obps.append(""); k_pcts.append(""); bb_pcts.append(""); stat_years.append("")
             continue
-        if utc < cutoff:
-            continue
-        p = it.get("player")
-        title = it.get("title","") or ""
-        if p:
-            mentions[p] = mentions.get(p, 0) + 1
-            if is_positive_opportunity_text(title):
-                opp_hits[p] = opp_hits.get(p, 0) + 1
-
-    cand["mentions_7d"] = cand["player_name"].map(mentions).fillna(0).astype(int)
-    cand["opp_7d"] = cand["player_name"].map(opp_hits).fillna(0).astype(int)
-    buzz_pct = ((cand["mentions_7d"].clip(upper=5) + cand["opp_7d"].clip(upper=3)) / 8.0).fillna(0)
-
-    # Composite score: DD_Rank 25%, BP_Rank 25%, perf 25%, age-level fit 15%, buzz 10%
-    cand["Add Score"] = (25*dd_pct + 25*bp_pct + 25*cand["perf_pct"] + 15*cand["age_level_fit"] + 10*buzz_pct).round(1)
-
-    def level_bonus(level: str) -> float:
-        L = (level or "").upper()
-        if "AAA" in L:
-            return 1.2
-        if "AA" in L:
-            return 0.8
-        if "A" in L:
-            return 0.4
-        return 0.2
-
-    urg_vals = []
-    for _, r in cand.iterrows():
-        score = float(r.get("Add Score") or 0.0)
-        pts = 0.0
-        if score >= 80:
-            pts += 2.7
-        elif score >= 70:
-            pts += 2.0
-        elif score >= 60:
-            pts += 1.3
-        elif score >= 50:
-            pts += 0.7
+        pid_int = int(pid)
+        stats: Dict[str, Any] = fetch_prospect_stats_from_statsapi(pid_int, state, year) or {}
+        stat_yr = year
+        # Fall back to previous year if player has no games played yet this season
+        if not stats.get("g"):
+            prev_stats: Dict[str, Any] = fetch_prospect_stats_from_statsapi(pid_int, state, year - 1) or {}
+            if prev_stats.get("g"):
+                stats = prev_stats
+                stat_yr = year - 1
+        if stats.get("type") == "hitter":
+            pa_f = float(stats.get("pa") or 0)
+            so_f = float(stats.get("so") or 0)
+            bb_f = float(stats.get("bb") or 0)
+            avgs.append(stats.get("avg", ""))
+            hrs.append(stats.get("hr", ""))
+            rbis.append(stats.get("rbi", ""))
+            sbs.append(stats.get("sb", ""))
+            obps.append(stats.get("obp", ""))
+            k_pcts.append(f"{(so_f/pa_f)*100:.1f}%" if pa_f > 0 else "")
+            bb_pcts.append(f"{(bb_f/pa_f)*100:.1f}%" if pa_f > 0 else "")
+            stat_years.append(str(stat_yr) if stats.get("g") else "")
         else:
-            pts += 0.3
-        pts += level_bonus(r.get("Level",""))
-        pts += min(1.8, int(r.get("opp_7d", 0) or 0) * 0.6)
-        pts += min(1.0, int(r.get("mentions_7d", 0) or 0) * 0.15)
+            avgs.append(""); hrs.append(""); rbis.append(""); sbs.append("")
+            obps.append(""); k_pcts.append(""); bb_pcts.append("")
+            stat_years.append(str(stat_yr) if stats.get("g") else "")
 
-        if pts >= 5.4:
-            urg = 5
-        elif pts >= 4.3:
-            urg = 4
-        elif pts >= 3.2:
-            urg = 3
-        elif pts >= 2.2:
-            urg = 2
-        else:
-            urg = 1
-        urg_vals.append(urg)
+    cand_sorted["AVG"] = avgs
+    cand_sorted["HR"] = hrs
+    cand_sorted["RBI"] = rbis
+    cand_sorted["SB"] = sbs
+    cand_sorted["OBP"] = obps
+    cand_sorted["K%"] = k_pcts
+    cand_sorted["BB%"] = bb_pcts
+    cand_sorted["Stat Yr"] = stat_years
 
-    cand["Urgency"] = urg_vals
-
-    out = cand.rename(columns={"player_name": "Name", "team_abbrev": "Team", "position": "Position", "age": "Age"})
-    out = out.sort_values("Add Score", ascending=False).head(10).copy()
+    out = cand_sorted.rename(columns={"player_name": "Name", "team_abbrev": "Team", "position": "Position", "age": "Age"})
 
     out["Savant"] = out["pid_int"].apply(
         lambda x: button(baseball_savant_url(int(x)), "Savant", bg="#0b8043") if pd.notna(x) else ""
@@ -2678,12 +2603,13 @@ def compute_prospect_adds(
         lambda x: button(baseball_reference_search_url(str(x)), "B-Ref", bg="#5f6368") if str(x).strip() else ""
     )
 
-    out = out[[
-        "Name", "Team", "Level", "Age", "Position",
+    display_cols = [
+        "Name", "Team", "Position", "Age", "Level",
         "dd_rank", "bp_rank",
-        "K%", "BB%",
-        "Add Score", "Urgency", "Savant", "B-Ref"
-    ]]
+        "AVG", "HR", "RBI", "SB", "OBP", "K%", "BB%",
+        "Stat Yr", "Savant", "B-Ref",
+    ]
+    out = out[[c for c in display_cols if c in out.columns]]
 
     out = out.rename(columns={
         "dd_rank": "DD Rank",
@@ -2720,8 +2646,9 @@ def build_top_prospect_adds_email(prospect_adds_df: pd.DataFrame) -> Tuple[str, 
     else:
         text_lines.append("Top Prospect Adds (Top 10)")
         for _, r in prospect_adds_df.iterrows():
+            stat_yr = f" [{r.get('Stat Yr','')}]" if r.get('Stat Yr', '') else ""
             text_lines.append(
-                f"- {r.get('Name','')} ({r.get('Team','')}) {r.get('Position','')} | Age {r.get('Age','')} | {r.get('Level','')} | DD:{r.get('DD Rank','')} BP:{r.get('BP Rank','')} | K%:{r.get('K%','')} BB%:{r.get('BB%','')} | Score {r.get('Add Score','')}"
+                f"- {r.get('Name','')} ({r.get('Team','')}) {r.get('Position','')} | Age {r.get('Age','')} | {r.get('Level','')} | DD:{r.get('DD Rank','')} BP:{r.get('BP Rank','')} | AVG:{r.get('AVG','')} HR:{r.get('HR','')} RBI:{r.get('RBI','')} SB:{r.get('SB','')} OBP:{r.get('OBP','')} K%:{r.get('K%','')} BB%:{r.get('BB%','')}{stat_yr}"
             )
         html_parts.append(render_table_html(prospect_adds_df, "Top Prospect Adds (Available) — max 10", html_cols={"Savant", "B-Ref"}))
 
@@ -2755,6 +2682,7 @@ def build_daily_bodies(
     roster_df: pd.DataFrame,
     title_str: str,
     prospect_adds_df: Optional[pd.DataFrame] = None,
+    tweets: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, str]:
     team_by_player = dict(zip(roster_df["player_name"].tolist(), roster_df["team_abbrev"].tolist()))
 
@@ -2793,6 +2721,11 @@ def build_daily_bodies(
     if prospect_adds_df is not None and not prospect_adds_df.empty:
         prospect_text, _ = build_top_prospect_adds_email(prospect_adds_df)
         text.append(f"\n{prospect_text}")
+
+    if tweets:
+        text.append("\nSocial Media Mentions (Twitter/X)")
+        for tw in tweets:
+            text.append(f"- @{tw.get('author','')}: {tw.get('summary','')}")
 
     text.append("\nReports / Quotes")
     if reports:
@@ -2887,6 +2820,9 @@ def build_daily_bodies(
             html.append("</div>")
     else:
         html.append("<div style='color:#666;'>No matched reports.</div>")
+
+    if tweets:
+        html.append(build_twitter_section_html(tweets))
 
     html.append("</body></html>")
     return text_body, "".join(html)
@@ -3124,6 +3060,13 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
 
     log(f"[daily] official_items={len(official_items)} reports_items={len(reports)} starters={len(starters)} opp_alerts={len(opp_alerts)} mlb_adds_rows={len(mlb_adds_df) if mlb_adds_df is not None else 0} prospect_adds_rows={len(prospect_adds_df) if prospect_adds_df is not None else 0}")
 
+    tweets: List[Dict[str, Any]] = []
+    try:
+        tweets = fetch_tweets_about_players(roster)
+        log(f"[daily] tweets fetched={len(tweets)}")
+    except Exception as e:
+        log(f"[daily] Twitter fetch error: {e}")
+
     any_adds = (mlb_adds_df is not None and not mlb_adds_df.empty) or (prospect_adds_df is not None and not prospect_adds_df.empty)
     if not official_items and not reports and not starters and not any_adds and not opp_alerts:
         log("[daily] no content found; sending empty digest")
@@ -3152,6 +3095,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
         roster_df,
         title_str,
         prospect_adds_df=prospect_adds_df,
+        tweets=tweets,
     )
     send_email(f"Dynasty Daily Update — {title_str}", text_body, html_body)
 
