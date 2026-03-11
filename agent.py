@@ -1145,9 +1145,10 @@ def _build_name_patterns(names: List[str]):
     patterns = []
     for name in names:
         # Escape each word individually and join with a flexible separator
-        # that accepts spaces or hyphens (e.g., "Nolan McLean" matches "Nolan-McLean")
+        # that accepts spaces, hyphens, or no separator at all
+        # (e.g., "Nolan McLean" matches "Nolan-McLean" and "NolanMcLean")
         parts = [re.escape(p) for p in name.split()]
-        flex = r'[-\s]+'.join(parts)
+        flex = r'[-\s]*'.join(parts)
         # Use negative lookbehind/lookahead instead of \b so hyphens are treated as
         # valid boundaries.  Also allow a possessive suffix ("McLean's").
         pat = re.compile(rf"(?<!\w){flex}(?:'s)?(?!\w)", re.IGNORECASE)
@@ -1748,6 +1749,8 @@ def fetch_prospect_stats_from_statsapi(pid: int, state: Dict[str, Any], year: in
             result["obp"] = st.get("obp", "")
             result["slg"] = st.get("slugging", "")
             result["sb"] = st.get("stolenBases", "")
+            result["rbi"] = st.get("rbi", "")
+            result["g"] = st.get("gamesPlayed", "")
             result["pa"] = st.get("plateAppearances", "")
             result["so"] = st.get("strikeOuts", "")
             result["bb"] = st.get("baseOnBalls", "")
@@ -2547,10 +2550,49 @@ def compute_prospect_adds(
         na_position="last",
     ).head(10).copy()
 
-    cand_sorted["K%"] = ""
-    cand_sorted["BB%"] = ""
-    cand_sorted["Add Score"] = ""
-    cand_sorted["Urgency"] = ""
+    # Fetch season stats for each player.
+    # Use current year; fall back to previous year if no games found yet.
+    avgs, hrs, rbis, sbs, obps, k_pcts, bb_pcts, stat_years = [], [], [], [], [], [], [], []
+    for _, r in cand_sorted.iterrows():
+        pid = r.get("pid")
+        if pd.isna(pid) or pid is None:
+            avgs.append(""); hrs.append(""); rbis.append(""); sbs.append("")
+            obps.append(""); k_pcts.append(""); bb_pcts.append(""); stat_years.append("")
+            continue
+        pid_int = int(pid)
+        stats: Dict[str, Any] = fetch_prospect_stats_from_statsapi(pid_int, state, year) or {}
+        stat_yr = year
+        # Fall back to previous year if player has no games played yet this season
+        if not stats.get("g"):
+            prev_stats: Dict[str, Any] = fetch_prospect_stats_from_statsapi(pid_int, state, year - 1) or {}
+            if prev_stats.get("g"):
+                stats = prev_stats
+                stat_yr = year - 1
+        if stats.get("type") == "hitter":
+            pa_f = float(stats.get("pa") or 0)
+            so_f = float(stats.get("so") or 0)
+            bb_f = float(stats.get("bb") or 0)
+            avgs.append(stats.get("avg", ""))
+            hrs.append(stats.get("hr", ""))
+            rbis.append(stats.get("rbi", ""))
+            sbs.append(stats.get("sb", ""))
+            obps.append(stats.get("obp", ""))
+            k_pcts.append(f"{(so_f/pa_f)*100:.1f}%" if pa_f > 0 else "")
+            bb_pcts.append(f"{(bb_f/pa_f)*100:.1f}%" if pa_f > 0 else "")
+            stat_years.append(str(stat_yr) if stats.get("g") else "")
+        else:
+            avgs.append(""); hrs.append(""); rbis.append(""); sbs.append("")
+            obps.append(""); k_pcts.append(""); bb_pcts.append("")
+            stat_years.append(str(stat_yr) if stats.get("g") else "")
+
+    cand_sorted["AVG"] = avgs
+    cand_sorted["HR"] = hrs
+    cand_sorted["RBI"] = rbis
+    cand_sorted["SB"] = sbs
+    cand_sorted["OBP"] = obps
+    cand_sorted["K%"] = k_pcts
+    cand_sorted["BB%"] = bb_pcts
+    cand_sorted["Stat Yr"] = stat_years
 
     out = cand_sorted.rename(columns={"player_name": "Name", "team_abbrev": "Team", "position": "Position", "age": "Age"})
 
@@ -2561,7 +2603,12 @@ def compute_prospect_adds(
         lambda x: button(baseball_reference_search_url(str(x)), "B-Ref", bg="#5f6368") if str(x).strip() else ""
     )
 
-    display_cols = ["Name", "Team", "Level", "Age", "Position", "dd_rank", "bp_rank", "K%", "BB%", "Add Score", "Urgency", "Savant", "B-Ref"]
+    display_cols = [
+        "Name", "Team", "Position", "Age", "Level",
+        "dd_rank", "bp_rank",
+        "AVG", "HR", "RBI", "SB", "OBP", "K%", "BB%",
+        "Stat Yr", "Savant", "B-Ref",
+    ]
     out = out[[c for c in display_cols if c in out.columns]]
 
     out = out.rename(columns={
@@ -2599,8 +2646,9 @@ def build_top_prospect_adds_email(prospect_adds_df: pd.DataFrame) -> Tuple[str, 
     else:
         text_lines.append("Top Prospect Adds (Top 10)")
         for _, r in prospect_adds_df.iterrows():
+            stat_yr = f" [{r.get('Stat Yr','')}]" if r.get('Stat Yr', '') else ""
             text_lines.append(
-                f"- {r.get('Name','')} ({r.get('Team','')}) {r.get('Position','')} | Age {r.get('Age','')} | {r.get('Level','')} | DD:{r.get('DD Rank','')} BP:{r.get('BP Rank','')} | K%:{r.get('K%','')} BB%:{r.get('BB%','')} | Score {r.get('Add Score','')}"
+                f"- {r.get('Name','')} ({r.get('Team','')}) {r.get('Position','')} | Age {r.get('Age','')} | {r.get('Level','')} | DD:{r.get('DD Rank','')} BP:{r.get('BP Rank','')} | AVG:{r.get('AVG','')} HR:{r.get('HR','')} RBI:{r.get('RBI','')} SB:{r.get('SB','')} OBP:{r.get('OBP','')} K%:{r.get('K%','')} BB%:{r.get('BB%','')}{stat_yr}"
             )
         html_parts.append(render_table_html(prospect_adds_df, "Top Prospect Adds (Available) — max 10", html_cols={"Savant", "B-Ref"}))
 
@@ -3392,13 +3440,6 @@ def run_weekly(force: bool = False) -> None:
     drafted_names = load_drafted_players()
     prospect_adds_df = compute_prospect_adds(available_df, dd_df, bp_df, reports_news, state, year, drafted_names)
 
-    weekly_tweets: List[Dict[str, Any]] = []
-    try:
-        weekly_tweets = fetch_tweets_about_players(roster_names)
-        log(f"[weekly] tweets fetched={len(weekly_tweets)}")
-    except Exception as e:
-        log(f"[weekly] Twitter fetch error: {e}")
-
     filtered_reports = [r for r in reports_news if not (r.get("player") in injury_players and is_injury_text(r.get("title", "")))]
 
     subject = f"Dynasty Weekly Report — {now_local.strftime('%b %d, %Y')}"
@@ -3574,9 +3615,6 @@ def run_weekly(force: bool = False) -> None:
         html.append("<div style='color:#666;'>No prospect add candidates found in available pool after filters.</div>")
     else:
         html.append(render_table_html(prospect_adds_df, "Top Prospect Adds (Available) — max 10", html_cols={"Savant", "B-Ref"}))
-
-    if weekly_tweets:
-        html.append(build_twitter_section_html(weekly_tweets))
 
     html.append("</body></html>")
     html_body = "".join(html)
