@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 from email.message import EmailMessage
 from datetime import datetime, timedelta, date
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlparse, urlencode, parse_qs, urlunparse, quote_plus
 from dateutil import tz
 import pytz
 import pandas as pd
@@ -66,6 +67,23 @@ MLBTR_MAIN_FEED = "http://feeds.feedburner.com/MlbTradeRumors"
 MLBTR_TX_FEED = "http://feeds.feedburner.com/MLBTRTransactions"
 CBS_MLB_RSS = "https://www.cbssports.com/rss/headlines/mlb/"
 PITCHERLIST_RSS = "https://pitcherlist.com/feed/"
+ROTOBALLER_RSS = "https://www.rotoballer.com/feed"
+PROSPECTS_LIVE_RSS = "https://prospectslive.com/feed/"
+THE_ATHLETIC_MLB_RSS = "https://theathletic.com/mlb/feed/"
+
+# Strong fantasy baseball sources: get deeper scans and relaxed filters
+STRONG_SOURCE_NAMES: Set[str] = {
+    "fangraphs", "fangraphs prospects", "pitcher list", "the athletic",
+    "baseball prospectus", "rotoballer", "prospects live",
+    "mlbtr main", "mlbtr transactions", "cbs mlb",
+}
+STRONG_SOURCE_DOMAINS: Set[str] = {
+    "fangraphs.com", "pitcherlist.com", "theathletic.com",
+    "baseballprospectus.com", "rotoballer.com", "prospectslive.com",
+    "mlbtraderumors.com", "cbssports.com",
+}
+RSS_SCAN_DEPTH_STRONG = 500
+RSS_SCAN_DEPTH_DEFAULT = 150
 
 # Daily MLB Adds inclusion days: Sunday(6), Wednesday(2), Saturday(5)
 MIDWEEK_ADDS_WEEKDAYS = {6, 2, 5}
@@ -1129,6 +1147,29 @@ def tx_since(tx_list: List[Dict[str, Any]], since: datetime) -> List[Dict[str, s
     return out
 
 
+def tx_since_date(tx_list: List[Dict[str, Any]], since_local_date: date) -> List[Dict[str, str]]:
+    """Return transactions whose date (YYYY-MM-DD) is strictly after since_local_date.
+
+    MLB StatsAPI only provides a date string, so we compare dates directly rather
+    than using a rolling UTC timestamp cutoff (which would drop most prior-day items).
+    """
+    out: List[Dict[str, str]] = []
+    for t in tx_list:
+        d = (t.get("date") or "").strip()
+        if not d:
+            continue
+        try:
+            tx_d = datetime.strptime(d, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if tx_d < since_local_date:
+            continue
+        desc = t.get("description") or t.get("typeDesc") or "Transaction update"
+        dt_utc = datetime(tx_d.year, tx_d.month, tx_d.day, tzinfo=tz.tzutc())
+        out.append({"utc": dt_utc.isoformat(), "desc": desc})
+    return out
+
+
 # =========================
 # RSS / News matching
 # =========================
@@ -1136,16 +1177,59 @@ def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "")).strip()
 
 
+def _canonicalize_link(link: str) -> str:
+    """Strip common tracking parameters from a URL to reduce duplicate cids."""
+    try:
+        parsed = urlparse(link)
+        params = parse_qs(parsed.query, keep_blank_values=False)
+        drop_prefixes = ("utm_", "oc", "soc_src", "soc_trk", "smid", "cid", "ref", "fbclid", "gclid")
+        cleaned = {k: v for k, v in params.items() if not any(k.lower().startswith(p) for p in drop_prefixes)}
+        new_query = urlencode(cleaned, doseq=True)
+        return urlunparse(parsed._replace(query=new_query, fragment=""))
+    except Exception:
+        return link
+
+
 def _content_id_stable(title: str, link: str) -> str:
-    return hashlib.sha1(f"{title}|{link}".encode("utf-8", errors="ignore")).hexdigest()
+    return hashlib.sha1(f"{title}|{_canonicalize_link(link)}".encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _normalize_text_for_matching(s: str) -> str:
+    """Normalize text before name-pattern matching to reduce false negatives."""
+    s = (s or "")
+    # Normalize curly/Unicode apostrophes and quotes to ASCII
+    s = re.sub(r"[\u2018\u2019\u02bc\u0060\u00b4]", "'", s)
+    s = re.sub(r"[\u201c\u201d]", '"', s)
+    # Normalize en/em dashes to hyphen
+    s = re.sub(r"[\u2013\u2014]", "-", s)
+    # Collapse whitespace
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _is_strong_source(source_name: str, link: str) -> bool:
+    """Return True if this item comes from a strong fantasy baseball source."""
+    sn = (source_name or "").lower()
+    if any(ss in sn for ss in STRONG_SOURCE_NAMES):
+        return True
+    try:
+        domain = urlparse(link).netloc.lower().lstrip("www.")
+        if any(domain == d or domain.endswith("." + d) for d in STRONG_SOURCE_DOMAINS):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _build_name_patterns(names: List[str]):
-    return [(name, re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)) for name in names]
+    patterns = []
+    for name in names:
+        normalized = _normalize_text_for_matching(name)
+        patterns.append((name, re.compile(rf"\b{re.escape(normalized)}\b", re.IGNORECASE)))
+    return patterns
 
 
 def _google_news_url(query: str) -> str:
-    from urllib.parse import quote_plus
     return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
 
 
@@ -1155,12 +1239,17 @@ def _build_google_news_sources(names: List[str]) -> List[Dict[str, str]]:
     for i in range(0, len(names), chunk_size):
         chunk = names[i:i + chunk_size]
         or_part = " OR ".join([f"\"{n}\"" for n in chunk])
-        query = f"({or_part}) baseball (injury OR soreness OR IL OR optioned OR promoted OR demoted OR trade OR traded OR DFA OR rehab OR suspension OR role)"
+        query = (
+            f"({or_part}) (MLB OR baseball OR minors OR roster OR IL OR injury "
+            f"OR optioned OR promoted OR demoted OR traded OR DFA OR rehab OR suspension OR role)"
+        )
         sources.append({"name": f"Google News (Roster {i // chunk_size + 1})", "url": _google_news_url(query)})
 
     sources.append({"name": "Google News (CBS Fantasy)", "url": _google_news_url("site:cbssports.com/fantasy baseball")})
     sources.append({"name": "Google News (RotoBaller)", "url": _google_news_url("site:rotoballer.com baseball")})
     sources.append({"name": "Google News (Pitcher List)", "url": _google_news_url("site:pitcherlist.com baseball")})
+    sources.append({"name": "Google News (Prospects Live)", "url": _google_news_url("site:prospectslive.com baseball")})
+    sources.append({"name": "Google News (The Athletic MLB)", "url": _google_news_url("site:theathletic.com MLB baseball")})
     sources.append({"name": "Google News (@pitcherlistplv)", "url": _google_news_url('"pitcherlistplv"')})
     return sources
 
@@ -1236,8 +1325,14 @@ def _source_priority(source_name: str) -> int:
         return 86
     if "pitcher list" in s:
         return 84
+    if "the athletic" in s:
+        return 83
     if "mlbtr" in s:
         return 82
+    if "rotoballer" in s:
+        return 80
+    if "prospects live" in s:
+        return 79
     if "cbs" in s:
         return 78
     if "google news" in s:
@@ -1366,6 +1461,9 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
         {"name": "Baseball America", "url": BASEBALL_AMERICA_RSS},
         {"name": "Baseball Prospectus", "url": BASEBALL_PROSPECTUS_RSS},
         {"name": "Pitcher List", "url": PITCHERLIST_RSS},
+        {"name": "RotoBaller", "url": ROTOBALLER_RSS},
+        {"name": "Prospects Live", "url": PROSPECTS_LIVE_RSS},
+        {"name": "The Athletic", "url": THE_ATHLETIC_MLB_RSS},
         {"name": "MLBTR Main", "url": MLBTR_MAIN_FEED},
         {"name": "MLBTR Transactions", "url": MLBTR_TX_FEED},
         {"name": "CBS MLB", "url": CBS_MLB_RSS},
@@ -1380,11 +1478,13 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
     cutoff = now_utc() - timedelta(days=max_age_days)
 
     for src in sources:
+        is_strong = _is_strong_source(src["name"], src["url"])
+        scan_depth = RSS_SCAN_DEPTH_STRONG if is_strong else RSS_SCAN_DEPTH_DEFAULT
         try:
             resp = requests.get(src["url"], timeout=20, headers={"User-Agent": "dynasty-agent/1.0"})
             resp.raise_for_status()
             feed = feedparser.parse(resp.content)
-            entries = getattr(feed, "entries", [])[:150]
+            entries = getattr(feed, "entries", [])[:scan_depth]
         except Exception:
             continue
 
@@ -1392,7 +1492,6 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
             title = _normalize(getattr(e, "title", ""))
             link = _normalize(getattr(e, "link", "")) or _normalize(getattr(e, "id", ""))
             summary = _normalize(getattr(e, "summary", "")) if hasattr(e, "summary") else ""
-            blob = f"{title} {summary}"
 
             if not title or not link:
                 continue
@@ -1403,28 +1502,42 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
 
             title_l = title.lower()
             link_l = link.lower()
-            bad_title_phrases = [
-                "stats, age, position",
-                "fantasy & news",
-                "player page",
-                "roster",
-                "depth chart",
-            ]
+            # For non-strong sources, apply strict template/junk filters.
+            # For strong sources, only drop the most obvious junk.
+            if is_strong:
+                bad_title_phrases = ["stats, age, position", "fantasy & news"]
+            else:
+                bad_title_phrases = [
+                    "stats, age, position",
+                    "fantasy & news",
+                    "player page",
+                    "roster",
+                    "depth chart",
+                ]
             if any(p in title_l for p in bad_title_phrases):
                 continue
-            if "/player/" in link_l and ("news" not in link_l) and ("article" not in link_l):
-                continue
+            # For strong sources allow /player/ URLs; for others apply the stricter rule
+            if not is_strong:
+                if "/player/" in link_l and ("news" not in link_l) and ("article" not in link_l):
+                    continue
 
-            cid = _content_id_stable(title, link)
+            # Canonicalize link before generating cid to reduce tracking-param duplicates
+            canon_link = _canonicalize_link(link)
+            cid = _content_id_stable(title, canon_link)
             if cid in seen:
                 continue
 
+            # Normalize text for name matching (apostrophes, dashes, whitespace)
+            norm_blob = _normalize_text_for_matching(f"{title} {summary}")
+
             players: List[str] = []
             for full, pat in patterns:
-                if pat.search(blob):
+                if pat.search(norm_blob):
                     players.append(full)
             if not players:
                 continue
+
+            item_summary = summarize_report_item(title)
 
             for p in sorted(set(players)):
                 matched.append(
@@ -1433,8 +1546,9 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
                         "player": p,
                         "source": src["name"],
                         "title": title,
-                        "link": link,
+                        "link": canon_link,
                         "cid": cid,
+                        "summary": item_summary,
                     }
                 )
 
@@ -1496,6 +1610,39 @@ def summarize_opportunity_net(title: str) -> str:
     if "more playing time" in tl or "bigger role" in tl or "role increase" in tl:
         return "Net: role increased → usage trending up."
     return f"Net: {t}"
+
+
+def summarize_report_item(title: str) -> str:
+    """Return a one-sentence heuristic summary for a news item based on its title.
+
+    Uses bucket classification (no external LLM calls).
+    """
+    t = (title or "").strip()
+    tl = t.lower()
+
+    if any(k in tl for k in ["injured", "injury", "il ", "injured list", "disabled list", "soreness",
+                               "strain", "sprain", "mri", "rehab", "shut down", "day-to-day",
+                               "tightness", "discomfort", "stiffness", "surgery", "fracture", "broken"]):
+        return "Net: injury/IL update → availability risk."
+    if any(k in tl for k in ["called up", "call-up", "recalled", "promoted", "promotion"]):
+        return "Net: called up/promoted → playing time bump likely."
+    if any(k in tl for k in ["optioned", "demoted", "sent down", "sent to triple", "triple-a"]):
+        return "Net: optioned/demoted → playing time risk short-term."
+    if any(k in tl for k in ["dfa", "designated for assignment", "released", "claimed", "waiver"]):
+        return "Net: roster/DFA move → team situation changed."
+    if any(k in tl for k in ["traded", "trade", "deal"]):
+        return "Net: trade/transaction → new team context."
+    if any(k in tl for k in ["activated", "returns", "returning", "reinstated", "comes off il", "off il"]):
+        return "Net: returns from IL → expect immediate playing time."
+    if any(k in tl for k in ["named starter", "named the starter", "named closer", "closing role",
+                               "moving into rotation", "joins rotation", "in the rotation",
+                               "everyday role", "more playing time", "bigger role", "role increase",
+                               "batting leadoff", "batting second", "batting third", "in the lineup",
+                               "starting lineup", "expected to start"]):
+        return "Net: role/lineup update → playing time trending."
+    if any(k in tl for k in ["suspension", "suspended"]):
+        return "Net: suspension → missed games ahead."
+    return "Net: news/performance note → monitor for impact."
 
 
 def compute_opportunity_signals(items: List[Dict[str, Any]], lookback_days: int = 14) -> Dict[str, Dict[str, Any]]:
@@ -2800,7 +2947,8 @@ def build_daily_bodies(
             nm = r["player"]
             tm = team_by_player.get(nm, "")
             hdr = f"{nm} ({tm})" if tm else nm
-            text.append(f"- {hdr}: {r['title']} [{r['source']}] {r['link']}")
+            item_summary = r.get("summary") or summarize_report_item(r.get("title", ""))
+            text.append(f"- {hdr}: {item_summary}  {r['title']} [{r['source']}] {r['link']}")
     else:
         text.append("No matched reports.")
     text_body = "\n".join(text)
@@ -2876,9 +3024,11 @@ def build_daily_bodies(
                 f"<div style='font-size:16px; margin-bottom:8px;'><b>{h(hdr)}</b></div>"
             )
             for r in by_player2[player]:
+                item_summary = r.get("summary") or summarize_report_item(r.get("title", ""))
                 html.append(
                     "<div style='margin:10px 0 0 0; padding-top:10px; border-top:1px solid #f0f0f0;'>"
-                    f"<div style='margin:0 0 6px 0;'>{h(r['title'])}</div>"
+                    f"<div style='font-weight:700; color:#0b5394; margin:0 0 4px 0;'>{h(item_summary)}</div>"
+                    f"<div style='margin:0 0 6px 0; color:#333; font-size:13px;'>{h(r['title'])}</div>"
                     "<div style='display:flex; gap:10px; align-items:center; flex-wrap:wrap;'>"
                     f"<span style='color:#555; font-size:13px;'>Source: {h(r['source'])}</span>"
                     f"{button(r['link'], 'News', bg='#5f6368')}"
@@ -3063,6 +3213,12 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
     since = now_utc() - timedelta(hours=lookback_hours or 24)
     log(f"[daily] since={since.isoformat()}")
 
+    # For daily email transactions, compare by local date (yesterday + today) to avoid
+    # missing prior-day items. MLB StatsAPI only provides YYYY-MM-DD dates so a rolling
+    # UTC timestamp cutoff drops most "yesterday" transactions.
+    since_local_date = local_now().date() - timedelta(days=1)
+    log(f"[daily] tx since_local_date={since_local_date.isoformat()} (yesterday in {TZ_NAME})")
+
     official_items: List[Dict[str, Any]] = []
     for i, player in enumerate(roster):
         if i % 10 == 0:
@@ -3070,7 +3226,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
         pid = lookup_mlbam_id(player, state)
         if not pid:
             continue
-        tx = tx_since(fetch_transactions(pid), since)
+        tx = tx_since_date(fetch_transactions(pid), since_local_date)
         for t in tx:
             official_items.append({"player": player, "desc": t["desc"], "utc": t["utc"]})
             append_jsonl(WEEKLY_OFFICIAL_PATH, {"player": player, **t})
