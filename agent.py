@@ -260,7 +260,6 @@ def _summarize_tweet(text: str, player_name: str) -> str:
     text = re.sub(r'http\S+', '', text)
     text = re.sub(r'@\w+', '', text)
     text = re.sub(r'#\w+', '', text)
-    text = re.sub(rf'\b{re.escape(player_name)}\b', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\s+', ' ', text).strip()
     if len(text) > 150:
         text = text[:147] + "..."
