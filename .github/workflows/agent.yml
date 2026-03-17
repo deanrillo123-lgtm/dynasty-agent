@@ -107,7 +107,7 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
 
           TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
-          TWITTER_MODE: "cost"
+          TWITTER_MODE: "accurate"
 
           RUN_MODE: ${{ inputs.run_mode }}
           IS_SCHEDULED: "0"
@@ -132,7 +132,7 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
 
           TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
-          TWITTER_MODE: "cost"
+          TWITTER_MODE: "accurate"
 
           IS_SCHEDULED: "1"
         run: |
