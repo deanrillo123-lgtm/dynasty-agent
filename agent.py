@@ -113,17 +113,18 @@ TWITTER_MODE = os.getenv("TWITTER_MODE", "cost").strip().lower()  # "cost" or "a
 
 TRACKED_TWITTER_ACCOUNTS = [
     "MLBPipeline", "PitcherList", "BaseballSavant", "FanGraphs",
-    "BaseballProspectus", "louisanalysis", "prospects1500", "heckman_matt115",
+    "louisanalysis", "prospects1500", "heckman_matt115",
     "pitcherlistplv", "baseballpro", "ibwaa", "brandondim",
     "jasonrrmartinez", "rotogut", "enosarris", "johnpgh",
     "downonthefarm", "ericcrossmlb", "prospectlarceny", "geoffpontesba",
     "the__arrival", "realjranderson", "mike_kurland", "tjstats",
-    "thedynastyguru", "prospectslive", "imaginerybrickwall", "dynastytradeshq",
+    "thedynastyguru", "prospectslive", "DynastyHalp", "dynastytradeshq",
     "jeffzimmerman", "derecarty", "baseballamerica", "codifybaseball",
-    "harryknowsball", "fanranked", "rotowire", "homerunapplesauce",
+    "harryknowsball", "fanranked", "rotowire", "HRApplesauce",
     "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys",
     "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay",
-    "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing"
+    "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing",
+    "MLB", "MLBNetwork", "TalkinBaseball_"
 ]
 
 TWITTER_MIN_LIKES = 2
