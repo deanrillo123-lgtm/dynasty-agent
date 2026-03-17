@@ -56,14 +56,14 @@ SPORT_ID_MILB = 21
 
 # RSS Sources
 MLB_NEWS_FEED = "https://www.mlb.com/feeds/news/rss.xml"
-MLB_PIPELINE_RSS = "https://www.mlb.com/pipeline/rss"
+MLB_PIPELINE_RSS = "https://www.mlb.com/feeds/news/rss.xml?t=pipeline"
 MILB_NEWS_RSS = "https://www.milb.com/feeds/news/rss.xml"
 FANGRAPHS_RSS = "https://blogs.fangraphs.com/feed/"
 FANGRAPHS_PROSPECTS_RSS = "https://blogs.fangraphs.com/category/prospects/feed/"
 BASEBALL_AMERICA_RSS = "https://www.baseballamerica.com/feed/"
 BASEBALL_PROSPECTUS_RSS = "https://www.baseballprospectus.com/feed/"
-MLBTR_MAIN_FEED = "http://feeds.feedburner.com/MlbTradeRumors"
-MLBTR_TX_FEED = "http://feeds.feedburner.com/MLBTRTransactions"
+MLBTR_MAIN_FEED = "https://www.mlbtraderumors.com/feed"
+MLBTR_TX_FEED = "https://www.mlbtraderumors.com/transactions/feed"
 CBS_MLB_RSS = "https://www.cbssports.com/rss/headlines/mlb/"
 PITCHERLIST_RSS = "https://pitcherlist.com/feed/"
 
@@ -109,6 +109,7 @@ SPRING_TRAINING_MONTHS = {2, 3, 4}  # Feb–Apr (some games can spill early Apri
 # Twitter/X Integration
 # =========================
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "").strip()
+TWITTER_MODE = os.getenv("TWITTER_MODE", "cost").strip().lower()  # "cost" or "accurate"
 
 TRACKED_TWITTER_ACCOUNTS = [
     "MLBPipeline", "PitcherList", "BaseballSavant", "FanGraphs",
@@ -167,55 +168,87 @@ def fetch_tweets_about_players(
     
     tweets_found: List[Dict[str, Any]] = []
     cutoff = now_utc() - timedelta(days=lookback_days)
-    accounts_query = " OR ".join([f"from:{acc}" for acc in TRACKED_TWITTER_ACCOUNTS])
-    
+
+    # Build query list per player based on mode
+    MAX_QUERY_LEN = 512
+
+    def _build_queries(player_name: str) -> List[str]:
+        base = f'"{player_name}" -is:retweet lang:en'
+        if TWITTER_MODE == "accurate" and TRACKED_TWITTER_ACCOUNTS:
+            chunks: List[List[str]] = []
+            current_chunk: List[str] = []
+            for acc in TRACKED_TWITTER_ACCOUNTS:
+                test_chunk = current_chunk + [acc]
+                accs_part = " OR ".join(f"from:{a}" for a in test_chunk)
+                candidate = f'"{player_name}" ({accs_part}) -is:retweet lang:en'
+                if len(candidate) > MAX_QUERY_LEN and current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = [acc]
+                else:
+                    current_chunk = test_chunk
+            if current_chunk:
+                chunks.append(current_chunk)
+            queries = []
+            for chunk in chunks:
+                accs_part = " OR ".join(f"from:{a}" for a in chunk)
+                queries.append(f'"{player_name}" ({accs_part}) -is:retweet lang:en')
+            return queries
+        else:
+            return [f'"{player_name}" baseball -is:retweet lang:en']
+
     for player_name in player_names:
-        try:
-            query = f'"{player_name}" ({accounts_query}) -is:retweet lang:en'
-            tweets = client.search_recent_tweets(
-                query=query,
-                max_results=10,
-                tweet_fields=['created_at', 'public_metrics', 'author_id'],
-                expansions=['author_id'],
-                user_fields=['username', 'public_metrics'],
-            )
-            
-            if not tweets.data:
+        queries = _build_queries(player_name)
+        seen_tweet_ids: Set[str] = set()
+        for query in queries:
+            try:
+                tweets = client.search_recent_tweets(
+                    query=query,
+                    max_results=10,
+                    tweet_fields=['created_at', 'public_metrics', 'author_id'],
+                    expansions=['author_id'],
+                    user_fields=['username', 'public_metrics'],
+                )
+
+                if not tweets.data:
+                    continue
+
+                user_map = {}
+                if tweets.includes and 'users' in tweets.includes:
+                    for user in tweets.includes['users']:
+                        user_map[user.id] = user.username
+
+                for tweet in tweets.data:
+                    if str(tweet.id) in seen_tweet_ids:
+                        continue
+                    seen_tweet_ids.add(str(tweet.id))
+
+                    cid = _content_id_stable(tweet.text, f"twitter/{tweet.id}")
+                    if cid in exclude_cids:
+                        continue
+
+                    if tweet.created_at and tweet.created_at.replace(tzinfo=tz.tzutc()) < cutoff:
+                        continue
+
+                    likes = tweet.public_metrics.get('like_count', 0) if tweet.public_metrics else 0
+                    if likes < TWITTER_MIN_LIKES:
+                        continue
+
+                    author_username = user_map.get(tweet.author_id, "unknown")
+                    summary = _summarize_tweet(tweet.text, player_name)
+
+                    tweets_found.append({
+                        "player": player_name,
+                        "text": tweet.text,
+                        "summary": summary,
+                        "url": f"https://twitter.com/{author_username}/status/{tweet.id}",
+                        "author": author_username,
+                        "likes": likes,
+                        "retweets": tweet.public_metrics.get('retweet_count', 0) if tweet.public_metrics else 0,
+                        "created_at": tweet.created_at.isoformat() if tweet.created_at else "",
+                    })
+            except Exception as e:
+                log(f"[twitter] Error fetching tweets for {player_name}: {e}")
                 continue
-            
-            user_map = {}
-            if tweets.includes and 'users' in tweets.includes:
-                for user in tweets.includes['users']:
-                    user_map[user.id] = user.username
-            
-            for tweet in tweets.data:
-                cid = _content_id_stable(tweet.text, f"twitter/{tweet.id}")
-                if cid in exclude_cids:
-                    continue
-                
-                if tweet.created_at and tweet.created_at.replace(tzinfo=tz.tzutc()) < cutoff:
-                    continue
-                
-                likes = tweet.public_metrics.get('like_count', 0) if tweet.public_metrics else 0
-                if likes < TWITTER_MIN_LIKES:
-                    continue
-                
-                author_username = user_map.get(tweet.author_id, "unknown")
-                summary = _summarize_tweet(tweet.text, player_name)
-                
-                tweets_found.append({
-                    "player": player_name,
-                    "text": tweet.text,
-                    "summary": summary,
-                    "url": f"https://twitter.com/{author_username}/status/{tweet.id}",
-                    "author": author_username,
-                    "likes": likes,
-                    "retweets": tweet.public_metrics.get('retweet_count', 0) if tweet.public_metrics else 0,
-                    "created_at": tweet.created_at.isoformat() if tweet.created_at else "",
-                })
-        except Exception as e:
-            log(f"[twitter] Error fetching tweets for {player_name}: {e}")
-            continue
     
     tweets_found.sort(key=lambda x: x['likes'], reverse=True)
     log(f"[twitter] found {len(tweets_found)} tweets")
@@ -1112,20 +1145,22 @@ def fetch_transactions(pid: int) -> List[Dict[str, Any]]:
         return []
 
 
-def tx_since(tx_list: List[Dict[str, Any]], since: datetime) -> List[Dict[str, str]]:
+def tx_since_date(tx_list: List[Dict[str, Any]], since_date) -> List[Dict[str, str]]:
+    """Filter transactions on or after since_date using date comparison."""
     out: List[Dict[str, str]] = []
     for t in tx_list:
-        d = t.get("date")
+        d = (t.get("date") or "").strip()
         if not d:
             continue
         try:
-            dt = datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=tz.tzutc())
+            tx_d = datetime.strptime(d, "%Y-%m-%d").date()
         except Exception:
             continue
-        if dt <= since:
+        if tx_d < since_date:
             continue
         desc = t.get("description") or t.get("typeDesc") or "Transaction update"
-        out.append({"utc": dt.isoformat(), "desc": desc})
+        dt_utc = datetime(tx_d.year, tx_d.month, tx_d.day, tzinfo=tz.tzutc())
+        out.append({"utc": dt_utc.isoformat(), "desc": desc})
     return out
 
 
@@ -1155,13 +1190,12 @@ def _build_google_news_sources(names: List[str]) -> List[Dict[str, str]]:
     for i in range(0, len(names), chunk_size):
         chunk = names[i:i + chunk_size]
         or_part = " OR ".join([f"\"{n}\"" for n in chunk])
-        query = f"({or_part}) baseball (injury OR soreness OR IL OR optioned OR promoted OR demoted OR trade OR traded OR DFA OR rehab OR suspension OR role)"
+        query = f"({or_part}) baseball (injury OR IL OR optioned OR promoted OR demoted OR trade OR DFA OR rehab) when:7d"
         sources.append({"name": f"Google News (Roster {i // chunk_size + 1})", "url": _google_news_url(query)})
 
-    sources.append({"name": "Google News (CBS Fantasy)", "url": _google_news_url("site:cbssports.com/fantasy baseball")})
-    sources.append({"name": "Google News (RotoBaller)", "url": _google_news_url("site:rotoballer.com baseball")})
-    sources.append({"name": "Google News (Pitcher List)", "url": _google_news_url("site:pitcherlist.com baseball")})
-    sources.append({"name": "Google News (@pitcherlistplv)", "url": _google_news_url('"pitcherlistplv"')})
+    sources.append({"name": "Google News (CBS Fantasy)", "url": _google_news_url("site:cbssports.com/fantasy baseball when:7d")})
+    sources.append({"name": "Google News (RotoBaller)", "url": _google_news_url("site:rotoballer.com baseball when:7d")})
+    sources.append({"name": "Google News (Pitcher List)", "url": _google_news_url("site:pitcherlist.com baseball when:7d")})
     return sources
 
 
@@ -1177,6 +1211,23 @@ def _prune_seen_rss(state: Dict[str, Any], keep_days: int = 35) -> None:
         if dt >= cutoff:
             new_seen[cid] = dt.isoformat()
     state["seen_rss"] = new_seen
+
+
+def _prune_seen_tweets(state: Dict[str, Any], keep_days: int = 14) -> None:
+    seen = state.get("seen_tweet_cids", {})
+    if isinstance(seen, list):
+        state["seen_tweet_cids"] = {}
+        return
+    cutoff = now_utc() - timedelta(days=keep_days)
+    new_seen: Dict[str, str] = {}
+    for cid, utc_s in seen.items():
+        try:
+            dt = datetime.fromisoformat(str(utc_s).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if dt >= cutoff:
+            new_seen[cid] = dt.isoformat()
+    state["seen_tweet_cids"] = new_seen
 
 
 def _headline_event_bucket(title: str) -> str:
@@ -1385,7 +1436,8 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
             resp.raise_for_status()
             feed = feedparser.parse(resp.content)
             entries = getattr(feed, "entries", [])[:150]
-        except Exception:
+        except Exception as e:
+            log(f"[rss] failed to fetch {src['name']}: {e}")
             continue
 
         for e in entries:
@@ -1397,7 +1449,9 @@ def fetch_reports(names: List[str], state: Dict[str, Any], max_age_days: int = 7
             if not title or not link:
                 continue
 
-            pub_dt = _parse_feed_entry_datetime(e) or now_utc()
+            pub_dt = _parse_feed_entry_datetime(e)
+            if not pub_dt:
+                continue
             if pub_dt < cutoff:
                 continue
 
@@ -2755,6 +2809,7 @@ def build_daily_bodies(
     roster_df: pd.DataFrame,
     title_str: str,
     prospect_adds_df: Optional[pd.DataFrame] = None,
+    tweets: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, str]:
     team_by_player = dict(zip(roster_df["player_name"].tolist(), roster_df["team_abbrev"].tolist()))
 
@@ -2803,6 +2858,12 @@ def build_daily_bodies(
             text.append(f"- {hdr}: {r['title']} [{r['source']}] {r['link']}")
     else:
         text.append("No matched reports.")
+
+    if tweets:
+        text.append("\nSocial Media Mentions (Twitter/X)")
+        for tw in tweets:
+            text.append(f"- {tw['player']}: {tw['summary']} (@{tw['author']}) {tw['url']}")
+
     text_body = "\n".join(text)
 
     html: List[str] = []
@@ -2887,6 +2948,9 @@ def build_daily_bodies(
             html.append("</div>")
     else:
         html.append("<div style='color:#666;'>No matched reports.</div>")
+
+    if tweets:
+        html.append(build_twitter_section_html(tweets))
 
     html.append("</body></html>")
     return text_body, "".join(html)
@@ -3061,6 +3125,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
             return
 
     since = now_utc() - timedelta(hours=lookback_hours or 24)
+    since_date = local_now().date() - timedelta(days=1)
     log(f"[daily] since={since.isoformat()}")
 
     official_items: List[Dict[str, Any]] = []
@@ -3070,7 +3135,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
         pid = lookup_mlbam_id(player, state)
         if not pid:
             continue
-        tx = tx_since(fetch_transactions(pid), since)
+        tx = tx_since_date(fetch_transactions(pid), since_date)
         for t in tx:
             official_items.append({"player": player, "desc": t["desc"], "utc": t["utc"]})
             append_jsonl(WEEKLY_OFFICIAL_PATH, {"player": player, **t})
@@ -3081,6 +3146,19 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
         append_jsonl(WEEKLY_REPORTS_PATH, r)
 
     starters = todays_starters_for_roster(roster_df)
+
+    log("[daily] fetching tweets...")
+    _prune_seen_tweets(state, keep_days=14)
+    seen_tweets = state.get("seen_tweet_cids", {})
+    if isinstance(seen_tweets, list):
+        seen_tweets = {c: now_utc().isoformat() for c in seen_tweets}
+    tweets = fetch_tweets_about_players(roster, exclude_cids=set(seen_tweets.keys()))
+    now_iso = now_utc().isoformat()
+    for t in tweets:
+        cid = _content_id_stable(t["text"], t["url"])
+        seen_tweets[cid] = now_iso
+    state["seen_tweet_cids"] = seen_tweets
+    log(f"[daily] tweets={len(tweets)}")
 
     opp_alerts: List[Dict[str, Any]] = []
     for r in reports:
@@ -3125,7 +3203,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
     log(f"[daily] official_items={len(official_items)} reports_items={len(reports)} starters={len(starters)} opp_alerts={len(opp_alerts)} mlb_adds_rows={len(mlb_adds_df) if mlb_adds_df is not None else 0} prospect_adds_rows={len(prospect_adds_df) if prospect_adds_df is not None else 0}")
 
     any_adds = (mlb_adds_df is not None and not mlb_adds_df.empty) or (prospect_adds_df is not None and not prospect_adds_df.empty)
-    if not official_items and not reports and not starters and not any_adds and not opp_alerts:
+    if not official_items and not reports and not starters and not any_adds and not opp_alerts and not tweets:
         log("[daily] no content found; sending empty digest")
         title_str = local_now().strftime("%b %d")
         text_body = f"Dynasty Daily Update — {title_str}\n\nNo qualifying items found this morning."
@@ -3152,6 +3230,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
         roster_df,
         title_str,
         prospect_adds_df=prospect_adds_df,
+        tweets=tweets,
     )
     send_email(f"Dynasty Daily Update — {title_str}", text_body, html_body)
 
@@ -3308,6 +3387,13 @@ def run_weekly(force: bool = False) -> None:
 
     official_news = read_jsonl(WEEKLY_OFFICIAL_PATH)
     reports_news = dedupe_reports_semantic(read_jsonl(WEEKLY_REPORTS_PATH))
+
+    log("[weekly] fetching tweets...")
+    seen_tweets = state.get("seen_tweet_cids", {})
+    if isinstance(seen_tweets, list):
+        seen_tweets = {}
+    weekly_tweets = fetch_tweets_about_players(roster_names, lookback_days=7, exclude_cids=set(seen_tweets.keys()))
+    log(f"[weekly] tweets={len(weekly_tweets)}")
 
     w_start, w_end = previous_monday_sunday_window(now_local)
 
@@ -3671,6 +3757,9 @@ def run_weekly(force: bool = False) -> None:
         html.append("<div style='color:#666;'>No prospect add candidates found in available pool after filters.</div>")
     else:
         html.append(render_table_html(prospect_adds_df, "Top Prospect Adds (Available) — max 10", html_cols={"Savant", "B-Ref"}))
+
+    if weekly_tweets:
+        html.append(build_twitter_section_html(weekly_tweets))
 
     html.append("</body></html>")
     html_body = "".join(html)
