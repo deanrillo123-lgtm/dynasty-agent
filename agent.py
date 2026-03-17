@@ -123,8 +123,7 @@ TRACKED_TWITTER_ACCOUNTS = [
     "harryknowsball", "fanranked", "rotowire", "HRApplesauce",
     "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys",
     "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay",
-    "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing",
-    "MLB", "MLBNetwork", "TalkinBaseball_"
+    "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing"
 ]
 
 TWITTER_MIN_LIKES = 2
