@@ -5,6 +5,7 @@ import smtplib
 import re
 import hashlib
 import socket
+import time
 from difflib import SequenceMatcher
 from email.message import EmailMessage
 from datetime import datetime, timedelta, date
@@ -807,17 +808,26 @@ def _read_sheet_tab_via_api(sheet_id: str, gid: str) -> pd.DataFrame:
     return pd.DataFrame(data, columns=headers).fillna("")
 
 
-def read_sheet_tab_csv(sheet_id: str, gid: str) -> pd.DataFrame:
+def read_sheet_tab_csv(sheet_id: str, gid: str, retries: int = 3) -> pd.DataFrame:
     if not sheet_id or not gid:
         raise ValueError("Missing GSHEET_ID or tab gid.")
-    if GOOGLE_SHEETS_CREDENTIALS:
+    last_err = None
+    for attempt in range(1, retries + 1):
         try:
-            return _read_sheet_tab_via_api(sheet_id, gid)
+            if GOOGLE_SHEETS_CREDENTIALS:
+                try:
+                    return _read_sheet_tab_via_api(sheet_id, gid)
+                except Exception as e:
+                    log(f"[sheets] API read failed ({e}); falling back to CSV export URL")
+            url = _gsheet_csv_url(sheet_id, gid)
+            # Row 1 is a title/metadata row; row 2 contains actual column headers.
+            return pd.read_csv(url, skiprows=1, dtype=str).fillna("")
         except Exception as e:
-            log(f"[sheets] API read failed ({e}); falling back to CSV export URL")
-    url = _gsheet_csv_url(sheet_id, gid)
-    # Row 1 is a title/metadata row; row 2 contains actual column headers.
-    return pd.read_csv(url, skiprows=1, dtype=str).fillna("")
+            last_err = e
+            log(f"[sheets] attempt {attempt}/{retries} failed: {e}")
+            if attempt < retries:
+                time.sleep(5 * attempt)
+    raise last_err
 
 
 def _pick_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
