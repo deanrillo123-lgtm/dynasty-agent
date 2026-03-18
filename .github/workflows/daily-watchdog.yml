@@ -1,0 +1,37 @@
+name: Daily Watchdog
+
+on:
+  schedule:
+    # Check every hour from 12:00-18:00 UTC (covers both CST and CDT windows)
+    - cron: "30 12 * * *"
+    - cron: "30 13 * * *"
+    - cron: "30 14 * * *"
+    - cron: "30 15 * * *"
+    - cron: "30 16 * * *"
+    - cron: "30 17 * * *"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if daily run succeeded today
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking for successful Dynasty Agent runs today..."
+
+          TODAY=$(date -u +%Y-%m-%d)
+
+          RUNS=$(gh api "repos/${{ github.repository }}/actions/workflows/agent.yml/runs?status=success&created=>=${TODAY}T00:00:00Z&per_page=5" \
+            --jq '.workflow_runs | length')
+
+          echo "Successful runs today: $RUNS"
+
+          if [ "$RUNS" -gt "0" ]; then
+            echo "Daily run already succeeded today. Nothing to do."
+            exit 0
+          fi
+
+          echo "No successful run today. Triggering daily run..."
+          gh workflow run agent.yml -f run_mode=daily --repo "${{ github.repository }}"
+          echo "Triggered daily run."
