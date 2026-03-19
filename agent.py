@@ -127,8 +127,8 @@ TRACKED_TWITTER_ACCOUNTS = [
     "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing"
 ]
 
-TWITTER_MIN_LIKES = 2
-TWITTER_LOOKBACK_DAYS = 7
+TWITTER_MIN_LIKES = 0
+TWITTER_LOOKBACK_DAYS = 2
 
 
 def test_twitter_bearer_token() -> Tuple[bool, str]:
