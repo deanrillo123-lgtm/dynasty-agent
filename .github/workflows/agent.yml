@@ -14,11 +14,7 @@ on:
     - cron: "0 12 * * 1"
     - cron: "0 13 * * 1"
 
-    # SPRING TRAINING
-    # 8:00 AM Chicago
-    # CST = 14:00 UTC, CDT = 13:00 UTC
-    - cron: "0 13 * * *"
-    - cron: "0 14 * * *"
+    
 
   workflow_dispatch:
     inputs:
