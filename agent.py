@@ -121,14 +121,14 @@ TRACKED_TWITTER_ACCOUNTS = [
     "the__arrival", "realjranderson", "mike_kurland", "tjstats",
     "thedynastyguru", "prospectslive", "DynastyHalp", "dynastytradeshq",
     "jeffzimmerman", "derecarty", "baseballamerica", "codifybaseball",
-    "harryknowsball", "fanranked", "rotowire", "HRApplesauce",
+    "harryknowsball", "fanranked", "rotowire","FAmmirantetfj","pasttheeyetest", "HRApplesauce",
     "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys",
     "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay",
-    "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing"
+    "dynastybaseball", "batflipcrazy","underdogmlb", "kylebland", "chrisblessing"
 ]
 
 TWITTER_MIN_LIKES = 0
-TWITTER_LOOKBACK_DAYS = 2
+TWITTER_LOOKBACK_DAYS = 1
 
 
 def test_twitter_bearer_token() -> Tuple[bool, str]:
