@@ -1154,6 +1154,47 @@ def fetch_transactions(pid: int) -> List[Dict[str, Any]]:
         return []
 
 
+IL_STATUS_CODES = {"D7": "7-Day IL", "D10": "10-Day IL", "D15": "15-Day IL", "D60": "60-Day IL"}
+
+
+def fetch_il_statuses(name_to_pid: Dict[str, Optional[int]]) -> Dict[str, str]:
+    """Batch-fetch IL status for roster players. Returns {player_name: status_label}."""
+    pid_to_names: Dict[int, str] = {}
+    for name, pid in name_to_pid.items():
+        if pid:
+            pid_to_names[int(pid)] = name
+
+    if not pid_to_names:
+        return {}
+
+    il_map: Dict[str, str] = {}
+    pids = list(pid_to_names.keys())
+    # API supports comma-separated IDs, batch in groups of 50
+    for i in range(0, len(pids), 50):
+        chunk = pids[i:i + 50]
+        try:
+            data = statsapi.get("people", {
+                "personIds": ",".join(str(p) for p in chunk),
+                "hydrate": "rosterEntries",
+            })
+            for person in data.get("people", []):
+                pid = person.get("id")
+                entries = person.get("rosterEntries", [])
+                current = [e for e in entries if not e.get("endDate")]
+                if not current:
+                    continue
+                code = current[0].get("status", {}).get("code", "")
+                if code in IL_STATUS_CODES:
+                    player_name = pid_to_names.get(pid, person.get("fullName", ""))
+                    il_map[player_name] = IL_STATUS_CODES[code]
+        except Exception as exc:
+            log(f"[il_status] Error fetching batch: {exc}")
+
+    if il_map:
+        log(f"[il_status] Found {len(il_map)} players on IL: {', '.join(il_map.keys())}")
+    return il_map
+
+
 def tx_since_date(tx_list: List[Dict[str, Any]], since_date) -> List[Dict[str, str]]:
     """Filter transactions on or after since_date using date comparison."""
     out: List[Dict[str, str]] = []
@@ -3457,6 +3498,13 @@ def run_weekly(force: bool = False) -> None:
         if it.get("player") and is_injury_text(it.get("title", "")):
             injury_players.add(it["player"])
             injury_cards.append({"player": it["player"], "text": it.get("title", ""), "source": it.get("source", "Report"), "link": it.get("link", "")})
+
+    log("[weekly] checking IL statuses...")
+    il_statuses = fetch_il_statuses(name_to_id)
+    for player_name, il_label in il_statuses.items():
+        injury_players.add(player_name)
+        if not any(c["player"] == player_name and "IL" in c.get("text", "") for c in injury_cards):
+            injury_cards.append({"player": player_name, "text": f"Currently on the {il_label}", "source": "MLB Roster", "link": ""})
 
     opp_map = compute_opportunity_signals(reports_news, lookback_days=14)
     opp_alerts_weekly: List[Dict[str, Any]] = []
