@@ -51,7 +51,7 @@ jobs:
           RUN_MODE: adds_build
           IS_SCHEDULED: "1"
         run: |
-          timeout 6h45m python -u agent.py
+          timeout 24300 python -u agent.py
 
       - name: Commit state/logs (if changed)
         run: |
