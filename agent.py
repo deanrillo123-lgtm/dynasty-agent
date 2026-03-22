@@ -3226,7 +3226,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
 
     mlb_adds_df = pd.DataFrame()
     prospect_adds_df = pd.DataFrame()
-    include_adds = (os.getenv("IS_SCHEDULED", "0") == "1" and should_include_midweek_adds_now()) or (os.getenv("RUN_MODE", "") == "daily_realnews_test")
+    include_adds = (os.getenv("IS_SCHEDULED", "0") == "1" and should_include_midweek_adds_now()) or os.getenv("RUN_MODE", "") in ("daily_realnews_test", "adds_build")
     if include_adds:
         try:
             available_df = load_available_players()
@@ -3993,6 +3993,8 @@ def main() -> None:
         run_weekly_twitter_test()
     elif mode in ("spring_training_daily", "spring_daily_all"):
         run_spring_training_daily_allgames()
+    elif mode == "adds_build":
+        run_daily()
     elif mode == "daily":
         run_daily()
     elif mode == "weekly":
