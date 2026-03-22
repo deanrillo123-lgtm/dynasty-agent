@@ -34,6 +34,10 @@ on:
           - daily_twitter_test
           - weekly_test
           - weekly_twitter_test
+      test_email:
+        description: "Override recipient email (leave blank for default)"
+        required: false
+        type: string
 
 concurrency:
   group: dynasty-agent-main
@@ -91,7 +95,7 @@ jobs:
         env:
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          RECIPIENT_EMAIL: ${{ inputs.test_email || secrets.RECIPIENT_EMAIL }}
 
           GSHEET_ID: ${{ secrets.GSHEET_ID }}
           ROSTER_GID: ${{ secrets.ROSTER_GID }}
