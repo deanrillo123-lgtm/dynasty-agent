@@ -931,7 +931,11 @@ def load_roster() -> pd.DataFrame:
 
 
 def load_available_players() -> pd.DataFrame:
-    df = read_sheet_tab_csv(GSHEET_ID, AVAILABLE_GID)
+    try:
+        df = read_sheet_tab_csv(GSHEET_ID, AVAILABLE_GID)
+    except Exception as e:
+        log(f"[available] Could not load available players: {e}")
+        return pd.DataFrame(columns=["player_name", "team_abbrev", "position", "age"])
     player_col = _pick_col(df, ["player", "player_name", "name", "player name"])
     team_col = _pick_col(df, ["team", "team_abbrev", "teamabbr", "mlb team", "org", "organization"])
     pos_col = _pick_col(df, ["position", "pos"])
