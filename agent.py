@@ -975,7 +975,11 @@ def load_drafted_players() -> Set[str]:
 
 
 def load_dynasty_dugout_rankings() -> pd.DataFrame:
-    df = read_sheet_tab_csv(GSHEET_ID, DD_RANK_GID)
+    try:
+        df = read_sheet_tab_csv(GSHEET_ID, DD_RANK_GID)
+    except Exception as e:
+        log(f"[dd_rank] Could not load rankings: {e}")
+        return pd.DataFrame(columns=["player_name", "dd_rank", "signed_year"])
     name_col = _pick_col(df, ["player", "player_name", "name", "player name"])
     rank_col = _pick_col(df, ["rank", "ranking", "dd_rank"])
     signed_col = _pick_col(df, ["signed", "signed_year", "signed year", "signed/drafted"])
@@ -1011,7 +1015,11 @@ def load_dynasty_dugout_rankings() -> pd.DataFrame:
 
 
 def load_baseball_prospectus_rankings() -> pd.DataFrame:
-    df = read_sheet_tab_csv(GSHEET_ID, BP_RANK_GID)
+    try:
+        df = read_sheet_tab_csv(GSHEET_ID, BP_RANK_GID)
+    except Exception as e:
+        log(f"[bp_rank] Could not load rankings: {e}")
+        return pd.DataFrame(columns=["player_name", "bp_rank"])
     name_col = _pick_col(df, ["player", "player_name", "name", "player name"])
     rank_col = _pick_col(df, ["rank", "ranking", "bp_rank"])
 
@@ -1035,7 +1043,11 @@ def load_baseball_prospectus_rankings() -> pd.DataFrame:
 
 
 def load_top500_dynasty_rankings() -> pd.DataFrame:
-    df = read_sheet_tab_csv(GSHEET_ID, TOP500_GID)
+    try:
+        df = read_sheet_tab_csv(GSHEET_ID, TOP500_GID)
+    except Exception as e:
+        log(f"[top500] Could not load rankings: {e}")
+        return pd.DataFrame(columns=["player_name", "top500_rank"])
     name_col = _pick_col(df, ["player", "player_name", "name", "player name"])
     rank_col = _pick_col(df, ["rank", "ranking", "top500_rank", "top500_rankings", "top 500", "top500"])
 
