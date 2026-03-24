@@ -3219,11 +3219,6 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
     if isinstance(seen_tweets, list):
         seen_tweets = {c: now_utc().isoformat() for c in seen_tweets}
     tweets = fetch_tweets_about_players(roster, exclude_cids=set(seen_tweets.keys()))
-    now_iso = now_utc().isoformat()
-    for t in tweets:
-        cid = _content_id_stable(t["text"], t["url"])
-        seen_tweets[cid] = now_iso
-    state["seen_tweet_cids"] = seen_tweets
     log(f"[daily] tweets={len(tweets)}")
 
     opp_alerts: List[Dict[str, Any]] = []
@@ -3299,6 +3294,13 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
         tweets=tweets,
     )
     send_email(f"Dynasty Daily Update — {title_str}", text_body, html_body)
+
+    # Mark tweets as seen only after email sends successfully
+    now_iso = now_utc().isoformat()
+    for t in tweets:
+        cid = _content_id_stable(t["text"], t["url"])
+        seen_tweets[cid] = now_iso
+    state["seen_tweet_cids"] = seen_tweets
 
     if env_flag("IS_SCHEDULED"):
         mark_daily_sent(state)
