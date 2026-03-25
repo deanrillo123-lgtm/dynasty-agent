@@ -3460,8 +3460,8 @@ def run_weekly(force: bool = False) -> None:
     seen_tweets = state.get("seen_tweet_cids", {})
     if isinstance(seen_tweets, list):
         seen_tweets = {}
-    weekly_tweets = fetch_tweets_about_players(roster_names, lookback_days=7, exclude_cids=set(seen_tweets.keys()))
-    log(f"[weekly] tweets={len(weekly_tweets)}")
+    weekly_tweets = []  # tweets excluded from weekly digest per user request
+    log("[weekly] tweets skipped (daily-only)")
 
     w_start, w_end = previous_monday_sunday_window(now_local)
 
