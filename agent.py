@@ -121,9 +121,9 @@ TRACKED_TWITTER_ACCOUNTS = [
     "the__arrival", "realjranderson", "mike_kurland", "tjstats",
     "thedynastyguru", "prospectslive", "DynastyHalp", "dynastytradeshq",
     "jeffzimmerman", "derecarty", "baseballamerica", "codifybaseball",
-    "harryknowsball", "fanranked", "rotowire","FAmmirantetfj","pasttheeyetest", "HRApplesauce",
-    "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys",
-    "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay",
+    "harryknowsball", "fanranked", "rotowire","FAmmiranteTFJ","PastTheEyeTest", "HRApplesauce", "C2Cbsbl","IsItTheWelsh", "MichaelCHalpern", "Prospectdugout",
+    "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys", "OPS_Baseball", "RossJensen12",
+    "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay", "LanceBroz","Statelinescout", "Insidethediamnd", "BaseUnstitched", "IE_MLB", "qopbaseball",
     "dynastybaseball", "batflipcrazy","underdogmlb", "kylebland", "chrisblessing"
 ]
 
