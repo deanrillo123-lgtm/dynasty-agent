@@ -1653,12 +1653,13 @@ def is_daily_time(state: Dict[str, Any]) -> Tuple[bool, str]:
     ln = local_now()
     wd = ln.weekday()  # Mon=0 ... Sun=6
 
-    # Accept hours 5-7 to handle DST ±1 hr shift (cron set to fixed UTC fires
-    # at 6 AM CST during standard time and 7 AM CDT during daylight saving time).
-    if ln.hour not in (5, 6, 7):
+    # Accept hours 5-12 to handle DST shift and GH Actions cron delays
+    # (free tier often fires 3-4 hours late). The last_daily_local_date
+    # check below prevents duplicate sends regardless of window size.
+    if ln.hour not in range(5, 13):
         if wd in (2, 5, 6):
-            return False, f"scheduled window mismatch: now={ln.isoformat()} expected ~6:00-7:59 {TZ_NAME} (Wed/Sat/Sun)"
-        return False, f"scheduled window mismatch: now={ln.isoformat()} expected ~6:00-7:59 {TZ_NAME}"
+            return False, f"scheduled window mismatch: now={ln.isoformat()} expected ~5:00-12:59 {TZ_NAME} (Wed/Sat/Sun)"
+        return False, f"scheduled window mismatch: now={ln.isoformat()} expected ~5:00-12:59 {TZ_NAME}"
 
     today = ln.strftime("%Y-%m-%d")
     if state.get("last_daily_local_date") == today:
@@ -1674,8 +1675,8 @@ def mark_daily_sent(state: Dict[str, Any]) -> None:
 def should_include_midweek_adds_now() -> bool:
     ln = local_now()
     wd = ln.weekday()
-    # Accept hours 5-7 to handle DST ±1 hr shift
-    return wd in (2, 5, 6) and ln.hour in (5, 6, 7)
+    # Accept hours 5-12 to handle DST shift and GH Actions cron delays
+    return wd in (2, 5, 6) and ln.hour in range(5, 13)
 
 
 def _fmt_local_time_safe(dt: datetime) -> str:
