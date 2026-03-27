@@ -155,12 +155,13 @@ def fetch_tweets_about_players(
     if not TWITTER_BEARER_TOKEN:
         log("[twitter] Bearer token not configured; skipping tweet fetch")
         return []
-    
+
     if not player_names:
         return []
-    
+
+    log(f"[twitter] mode={TWITTER_MODE} players={len(player_names)} lookback={lookback_days}d")
     exclude_cids = exclude_cids or set()
-    
+
     try:
         client = tweepy.Client(bearer_token=TWITTER_BEARER_TOKEN, wait_on_rate_limit=True)
     except Exception as e:
@@ -197,6 +198,7 @@ def fetch_tweets_about_players(
         else:
             return [f'"{player_name}" baseball -is:retweet lang:en']
 
+    api_errors = 0
     for player_name in player_names:
         queries = _build_queries(player_name)
         seen_tweet_ids: Set[str] = set()
@@ -248,11 +250,19 @@ def fetch_tweets_about_players(
                         "created_at": tweet.created_at.isoformat() if tweet.created_at else "",
                     })
             except Exception as e:
+                api_errors += 1
                 log(f"[twitter] Error fetching tweets for {player_name}: {e}")
+                if api_errors >= 3:
+                    log(f"[twitter] stopping after {api_errors} consecutive API errors")
+                    break
                 continue
-    
+        if api_errors >= 3:
+            break
+
+    if api_errors > 0:
+        log(f"[twitter] completed with {api_errors} API errors")
     tweets_found.sort(key=lambda x: x['likes'], reverse=True)
-    log(f"[twitter] found {len(tweets_found)} tweets")
+    log(f"[twitter] found {len(tweets_found)} tweets across {len(player_names)} players")
     return tweets_found
 
 
