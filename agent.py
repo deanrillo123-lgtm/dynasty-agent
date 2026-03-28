@@ -574,7 +574,6 @@ def send_email(subject: str, text_body: str, html_body: str) -> None:
     msg["Subject"] = subject
     msg["From"] = f"Dynasty Agent <{SENDER}>"
     msg["To"] = RECIPIENT
-    msg["Bcc"] = "drikusdevelop@gmail.com"  # TEMP: remove after verifying scheduled tweets
 
     msg.set_content(text_body)
     msg.add_alternative(html_body, subtype="html")
