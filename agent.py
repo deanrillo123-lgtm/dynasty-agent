@@ -1696,7 +1696,7 @@ def _fmt_local_time_safe(dt: datetime) -> str:
 def todays_starters_for_roster(roster_df: pd.DataFrame) -> List[Dict[str, str]]:
     roster_df = roster_df.copy()
     roster_df["position"] = roster_df.get("position", "").fillna("").astype(str)
-    sp_names = roster_df.loc[roster_df["position"].str.contains("SP", case=False, na=False), "player_name"].tolist()
+    sp_names = roster_df.loc[roster_df["position"].str.contains("SP|^P$", case=False, na=False), "player_name"].tolist()
     sp_set = set(sp_names)
     if not sp_set:
         return []
@@ -2203,7 +2203,7 @@ def week_date_range_monday_sunday(now_local: datetime) -> Tuple[date, date]:
 def starting_pitcher_schedule_week(roster_df: pd.DataFrame) -> pd.DataFrame:
     roster_df = roster_df.copy()
     roster_df["position"] = roster_df.get("position", "").fillna("").astype(str)
-    sp_names = roster_df.loc[roster_df["position"].str.contains("SP", case=False, na=False), "player_name"].tolist()
+    sp_names = roster_df.loc[roster_df["position"].str.contains("SP|^P$", case=False, na=False), "player_name"].tolist()
     sp_set = set(sp_names)
     if not sp_set:
         return pd.DataFrame(columns=["Date", "Day", "Pitcher", "Matchup", "Opponent", "Time (CT)", "Week Starts"])
