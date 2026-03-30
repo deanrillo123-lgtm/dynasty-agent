@@ -3324,9 +3324,7 @@ def run_daily(lookback_hours: Optional[int] = None) -> None:
 # =========================
 def should_send_weekly_now() -> bool:
     ln = local_now()
-    # Accept hours 6-8 to handle DST ±1 hr shift (cron set to 7 AM CST fires at
-    # 7 AM during standard time and 8 AM during daylight saving time).
-    return ln.weekday() == 0 and ln.hour in (6, 7, 8)  # Monday ~7am CT
+    return ln.weekday() == 0 and ln.hour in range(5, 13)  # Monday ~5am-12:59pm CT
 
 
 def mark_weekly_sent(state: Dict[str, Any]) -> None:
@@ -4024,6 +4022,8 @@ def main() -> None:
         run_spring_training_daily_allgames()
     elif mode == "adds_build":
         run_daily()
+        if should_send_weekly_now():
+            run_weekly()
     elif mode == "daily":
         run_daily()
     elif mode == "weekly":
