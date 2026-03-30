@@ -584,15 +584,15 @@
     "MIL": 158,
     "ATH": 133
   },
-  "last_weekly_local_date": "2026-03-03",
+  "last_weekly_local_date": "2026-03-30",
   "cache_files": {
     "savant_batter_2026": {
       "path": "state/savant_batter_2026.csv",
-      "fetched_utc": "2026-03-30T10:48:39.100296+00:00"
+      "fetched_utc": "2026-03-30T14:54:30.339453+00:00"
     },
     "savant_pitcher_2026": {
       "path": "state/savant_pitcher_2026.csv",
-      "fetched_utc": "2026-03-30T10:48:39.332142+00:00"
+      "fetched_utc": "2026-03-30T14:54:30.523758+00:00"
     }
   },
   "last_daily_local_date": "2026-03-30",
@@ -1658,5 +1658,37 @@
     "5b0f47816f515ed99fa6060cfa645188372235a0": "2026-03-30T10:49:00.735226+00:00",
     "890151ce3bda4eafbb0eaa962103b28fde9df7bd": "2026-03-30T10:49:00.735226+00:00",
     "556469d64125b4e6bba49fda21695abc801d3e90": "2026-03-30T10:49:00.735226+00:00"
+  },
+  "team_abbrev_map": {
+    "ATH": 133,
+    "PIT": 134,
+    "SD": 135,
+    "SEA": 136,
+    "SF": 137,
+    "STL": 138,
+    "TB": 139,
+    "TEX": 140,
+    "TOR": 141,
+    "MIN": 142,
+    "PHI": 143,
+    "ATL": 144,
+    "CWS": 145,
+    "MIA": 146,
+    "NYY": 147,
+    "MIL": 158,
+    "LAA": 108,
+    "AZ": 109,
+    "BAL": 110,
+    "BOS": 111,
+    "CHC": 112,
+    "CIN": 113,
+    "CLE": 114,
+    "COL": 115,
+    "DET": 116,
+    "HOU": 117,
+    "KC": 118,
+    "LAD": 119,
+    "WSH": 120,
+    "NYM": 121
   }
 }
