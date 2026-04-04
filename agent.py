@@ -113,7 +113,7 @@ TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "").strip()
 TWITTER_MODE = os.getenv("TWITTER_MODE", "cost").strip().lower()  # "cost" or "accurate"
 
 TRACKED_TWITTER_ACCOUNTS = [
-    "MLBPipeline", "PitcherList", "BaseballSavant", "FanGraphs",
+    "MLBPipeline", "PitcherList", "BaseballSavant", "FanGraphs", "_MikeVA", "Mike_Kurland", "PitchingNinja", "dynastyinfo411",
     "louisanalysis", "prospects1500", "heckman_matt115",
     "pitcherlistplv", "baseballpro", "ibwaa", "brandondim",
     "jasonrrmartinez", "rotogut", "enosarris", "johnpgh",
