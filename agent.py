@@ -114,17 +114,20 @@ TWITTER_MODE = os.getenv("TWITTER_MODE", "cost").strip().lower()  # "cost" or "a
 
 TRACKED_TWITTER_ACCOUNTS = [
     "MLBPipeline", "PitcherList", "BaseballSavant", "FanGraphs", "_MikeVA", "Mike_Kurland", "PitchingNinja", "dynastyinfo411",
-    "louisanalysis", "prospects1500", "heckman_matt115",
-    "pitcherlistplv", "baseballpro", "ibwaa", "brandondim",
-    "jasonrrmartinez", "rotogut", "enosarris", "johnpgh",
-    "downonthefarm", "ericcrossmlb", "prospectlarceny", "geoffpontesba",
-    "the__arrival", "realjranderson", "mike_kurland", "tjstats",
-    "thedynastyguru", "prospectslive", "DynastyHalp", "dynastytradeshq",
-    "jeffzimmerman", "derecarty", "baseballamerica", "codifybaseball",
+    "louisanalysis", "prospects1500", "heckman_matt115", "RobbieZaitchik", "Damon98_", "dynastyinfo411", "tschulmanreport", "tommym8",
+    "CleGuardPro", "Jesus_Cano88", "RobSilver", "DolphHauldhagen", "CleGuardPro", "Sonny_108", "jnorris427", "J_D_Cameron", "cnash_baseball",
+    "pitcherlistplv", "baseballpro", "ibwaa", "brandondim", "dannybarrand_", "PrspctVibeCheck", "Mike_Kurland", "DigsPitcher", "tangotiger",
+    "AlexMurphyJour", "FXBGNats", "NatsOfTheFuture", "dodgerslite", "Bnicklaus7", "NickJJ95", "IanCundall", "Jacob_Maxwell14", "RotoGut",
+    "jasonrrmartinez", "rotogut", "enosarris", "johnpgh", "BravesStats", "CloserMonkey", "JoeDoyleMiLB", "Prospect_Tilt", "AramLeighton8",
+    "downonthefarm", "ericcrossmlb", "prospectlarceny", "geoffpontesba", "HighLevBaseball", "sportz_nutt51", "Jesus_Cano88", "jmcammisa", "JasonSanteiu",
+    "the__arrival", "realjranderson", "mike_kurland", "tjstats", "fantasyaceball", "jacksonab_", "EliBenPorat", "tigersMLreport", "ander_beisbol1",
+    "thedynastyguru", "prospectslive", "DynastyHalp", "dynastytradeshq", "RotoSurgeon", "corbin_young21", "TBTimes_Rays", "charlottevarnes", "drewisokay",
+    "ZackMeisel", "NateRoper_", "CrascasCade", "discussbaseball", "JL_Baseball", "NextYearInCle", "TheWrigleyWire", "CleGuardPro", "brendan_cubs",
+    "jeffzimmerman", "derecarty", "baseballamerica", "codifybaseball", "FOFProspects", "jo_dynasty3", "YGMfantasy", "francysromeroFR", "mdthomp_PLive",
     "harryknowsball", "fanranked", "rotowire","FAmmiranteTFJ","PastTheEyeTest", "HRApplesauce", "C2Cbsbl","IsItTheWelsh", "MichaelCHalpern", "Prospectdugout",
-    "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys", "OPS_Baseball", "RossJensen12",
+    "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys", "OPS_Baseball", "RossJensen12", "Owen_FBB", "_mattywood_", "baseballpods",
     "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay", "LanceBroz","Statelinescout", "Insidethediamnd", "BaseUnstitched", "IE_MLB", "qopbaseball",
-    "dynastybaseball", "batflipcrazy","underdogmlb", "kylebland", "chrisblessing"
+    "dynastybaseball", "batflipcrazy","underdogmlb", "kylebland", "chrisblessing" "jayhaykid", "JoeOrrico99", "mdrc0508", "mdrc0508", "JoeOrrico99",
 ]
 
 TWITTER_MIN_LIKES = 0
