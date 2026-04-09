@@ -127,8 +127,17 @@ TRACKED_TWITTER_ACCOUNTS = [
     "harryknowsball", "fanranked", "rotowire","FAmmiranteTFJ","PastTheEyeTest", "HRApplesauce", "C2Cbsbl","IsItTheWelsh", "MichaelCHalpern", "Prospectdugout",
     "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys", "OPS_Baseball", "RossJensen12", "Owen_FBB", "_mattywood_", "baseballpods",
     "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay", "LanceBroz","Statelinescout", "Insidethediamnd", "BaseUnstitched", "IE_MLB", "qopbaseball",
-    "dynastybaseball", "batflipcrazy","underdogmlb", "kylebland", "chrisblessing" "jayhaykid", "JoeOrrico99", "mdrc0508", "mdrc0508", "JoeOrrico99",
+    "dynastybaseball", "batflipcrazy","underdogmlb", "kylebland", "chrisblessing", "jayhaykid", "JoeOrrico99", "mdrc0508",
 ]
+# Deduplicate (case-insensitive) while preserving order
+_seen_accs = set()
+_deduped = []
+for _a in TRACKED_TWITTER_ACCOUNTS:
+    _k = _a.lower()
+    if _k not in _seen_accs:
+        _seen_accs.add(_k)
+        _deduped.append(_a)
+TRACKED_TWITTER_ACCOUNTS = _deduped
 
 TWITTER_MIN_LIKES = 0
 TWITTER_LOOKBACK_DAYS = 1
@@ -201,10 +210,11 @@ def fetch_tweets_about_players(
         else:
             return [f'"{player_name}" baseball -is:retweet lang:en']
 
-    api_errors = 0
+    total_errors = 0
     for player_name in player_names:
         queries = _build_queries(player_name)
         seen_tweet_ids: Set[str] = set()
+        player_errors = 0
         for query in queries:
             try:
                 tweets = client.search_recent_tweets(
@@ -253,17 +263,16 @@ def fetch_tweets_about_players(
                         "created_at": tweet.created_at.isoformat() if tweet.created_at else "",
                     })
             except Exception as e:
-                api_errors += 1
+                player_errors += 1
+                total_errors += 1
                 log(f"[twitter] Error fetching tweets for {player_name}: {e}")
-                if api_errors >= 3:
-                    log(f"[twitter] stopping after {api_errors} consecutive API errors")
+                if player_errors >= 3:
+                    log(f"[twitter] skipping {player_name} after {player_errors} errors")
                     break
                 continue
-        if api_errors >= 3:
-            break
 
-    if api_errors > 0:
-        log(f"[twitter] completed with {api_errors} API errors")
+    if total_errors > 0:
+        log(f"[twitter] completed with {total_errors} total API errors")
     tweets_found.sort(key=lambda x: x['likes'], reverse=True)
     log(f"[twitter] found {len(tweets_found)} tweets across {len(player_names)} players")
     return tweets_found
