@@ -72,7 +72,7 @@ PITCHERLIST_RSS = "https://pitcherlist.com/feed/"
 MIDWEEK_ADDS_WEEKDAYS = {6, 2, 5}
 
 INJURY_KEYWORDS = [
-    "injury", "injured", "soreness", "sore", "il", "disabled list", "mri", "strain", "sprain",
+    "injury", "injured", "soreness", "sore", "il", "injured list", "mri", "strain", "sprain",
     "fracture", "broken", "surgery", "shut down", "rehab", "rehabilitation", "out for", "day-to-day",
     "tightness", "discomfort", "scratched", "left the game", "stiffness"
 ]
@@ -117,7 +117,7 @@ TRACKED_TWITTER_ACCOUNTS = [
     "louisanalysis", "prospects1500", "heckman_matt115", "RobbieZaitchik", "Damon98_", "dynastyinfo411", "tschulmanreport", "tommym8",
     "CleGuardPro", "Jesus_Cano88", "RobSilver", "DolphHauldhagen", "CleGuardPro", "Sonny_108", "jnorris427", "J_D_Cameron", "cnash_baseball",
     "pitcherlistplv", "baseballpro", "ibwaa", "brandondim", "dannybarrand_", "PrspctVibeCheck", "Mike_Kurland", "DigsPitcher", "tangotiger",
-    "AlexMurphyJour", "FXBGNats", "NatsOfTheFuture", "dodgerslite", "Bnicklaus7", "NickJJ95", "IanCundall", "Jacob_Maxwell14", "RotoGut",
+    "AlexMurphyJour", "FXBGNats", "NatsOfTheFuture", "Bnicklaus7", "NickJJ95", "IanCundall", "Jacob_Maxwell14", "RotoGut",
     "jasonrrmartinez", "rotogut", "enosarris", "johnpgh", "BravesStats", "CloserMonkey", "JoeDoyleMiLB", "Prospect_Tilt", "AramLeighton8",
     "downonthefarm", "ericcrossmlb", "prospectlarceny", "geoffpontesba", "HighLevBaseball", "sportz_nutt51", "Jesus_Cano88", "jmcammisa", "JasonSanteiu",
     "the__arrival", "realjranderson", "mike_kurland", "tjstats", "fantasyaceball", "jacksonab_", "EliBenPorat", "tigersMLreport", "ander_beisbol1",
@@ -127,7 +127,7 @@ TRACKED_TWITTER_ACCOUNTS = [
     "harryknowsball", "fanranked", "rotowire","FAmmiranteTFJ","PastTheEyeTest", "HRApplesauce", "C2Cbsbl","IsItTheWelsh", "MichaelCHalpern", "Prospectdugout",
     "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys", "OPS_Baseball", "RossJensen12", "Owen_FBB", "_mattywood_", "baseballpods",
     "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay", "LanceBroz","Statelinescout", "Insidethediamnd", "BaseUnstitched", "IE_MLB", "qopbaseball",
-    "dynastybaseball", "batflipcrazy","underdogmlb", "kylebland", "chrisblessing", "jayhaykid", "JoeOrrico99", "mdrc0508",
+    "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing", "jayhaykid", "JoeOrrico99", "mdrc0508",
 ]
 # Deduplicate (case-insensitive) while preserving order
 _seen_accs = set()
