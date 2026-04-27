@@ -22,8 +22,8 @@ jobs:
 
           TODAY=$(date -u +%Y-%m-%d)
 
-          RUNS=$(gh api "repos/${{ github.repository }}/actions/workflows/agent.yml/runs?status=success&created=>=${TODAY}T00:00:00Z&per_page=5" \
-            --jq '.workflow_runs | length')
+          RUNS=$(gh api "repos/${{ github.repository }}/actions/workflows/agent.yml/runs?status=completed&per_page=10" \
+            --jq "[.workflow_runs[] | select(.conclusion == \"success\" and (.created_at | startswith(\"${TODAY}\")))] | length")
 
           echo "Successful runs today: $RUNS"
 
