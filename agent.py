@@ -113,11 +113,11 @@ TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "").strip()
 TWITTER_MODE = os.getenv("TWITTER_MODE", "cost").strip().lower()  # "cost" or "accurate"
 
 TRACKED_TWITTER_ACCOUNTS = [
-    "MLBPipeline", "PitcherList", "BaseballSavant", "FanGraphs", "_MikeVA", "Mike_Kurland", "PitchingNinja", "dynastyinfo411",
-    "louisanalysis", "prospects1500", "heckman_matt115", "RobbieZaitchik", "Damon98_", "dynastyinfo411", "tschulmanreport", "tommym8",
-    "CleGuardPro", "Jesus_Cano88", "RobSilver", "DolphHauldhagen", "CleGuardPro", "Sonny_108", "jnorris427", "J_D_Cameron", "cnash_baseball",
+    "MLBPipeline", "PitcherList", "BaseballSavant", "FanGraphs", "_MikeVA", "Mike_Kurland", "PitchingNinja", "dynastyinfo411", "PSLtoFlushing",
+    "louisanalysis", "prospects1500", "heckman_matt115", "RobbieZaitchik", "Damon98_", "dynastyinfo411", "tschulmanreport", "tommym8", "ltw0303",
+    "CleGuardPro", "Jesus_Cano88", "RobSilver", "DolphHauldhagen", "CleGuardPro", "Sonny_108", "jnorris427", "J_D_Cameron", "cnash_baseball", "youngbucsPIT",
     "pitcherlistplv", "baseballpro", "ibwaa", "brandondim", "dannybarrand_", "PrspctVibeCheck", "Mike_Kurland", "DigsPitcher", "tangotiger",
-    "AlexMurphyJour", "FXBGNats", "NatsOfTheFuture", "Bnicklaus7", "NickJJ95", "IanCundall", "Jacob_Maxwell14", "RotoGut",
+    "AlexMurphyJour", "FXBGNats", "NatsOfTheFuture", "Bnicklaus7", "NickJJ95", "IanCundall", "Jacob_Maxwell14", "RotoGut", "Lethalplatypus1",
     "jasonrrmartinez", "rotogut", "enosarris", "johnpgh", "BravesStats", "CloserMonkey", "JoeDoyleMiLB", "Prospect_Tilt", "AramLeighton8",
     "downonthefarm", "ericcrossmlb", "prospectlarceny", "geoffpontesba", "HighLevBaseball", "sportz_nutt51", "Jesus_Cano88", "jmcammisa", "JasonSanteiu",
     "the__arrival", "realjranderson", "mike_kurland", "tjstats", "fantasyaceball", "jacksonab_", "EliBenPorat", "tigersMLreport", "ander_beisbol1",
@@ -126,8 +126,8 @@ TRACKED_TWITTER_ACCOUNTS = [
     "jeffzimmerman", "derecarty", "baseballamerica", "codifybaseball", "FOFProspects", "jo_dynasty3", "YGMfantasy", "francysromeroFR", "mdthomp_PLive",
     "harryknowsball", "fanranked", "rotowire","FAmmiranteTFJ","PastTheEyeTest", "HRApplesauce", "C2Cbsbl","IsItTheWelsh", "MichaelCHalpern", "Prospectdugout",
     "jasonrradawitz", "theprospectguy", "nathanpstrauss", "mlbplayeranalys", "OPS_Baseball", "RossJensen12", "Owen_FBB", "_mattywood_", "baseballpods",
-    "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay", "LanceBroz","Statelinescout", "Insidethediamnd", "BaseUnstitched", "IE_MLB", "qopbaseball",
-    "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing", "jayhaykid", "JoeOrrico99", "mdrc0508",
+    "dynastypicksups", "dynastyonestop", "sotop_23", "maxbay", "LanceBroz","Statelinescout", "Insidethediamnd", "BaseUnstitched", "IE_MLB", "qopbaseball","Raysmilb", "loveofsports24",
+    "dynastybaseball", "batflipcrazy", "kylebland", "chrisblessing", "jayhaykid", "JoeOrrico99", "mdrc0508", "paulcubbage23", "jensey_juicy", "milbmariners", "Msplayerdev", "paulhembo",
 ]
 # Deduplicate (case-insensitive) while preserving order
 _seen_accs = set()
