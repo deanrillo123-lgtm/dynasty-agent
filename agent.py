@@ -118,7 +118,7 @@ TRACKED_TWITTER_ACCOUNTS = [
     "CleGuardPro", "Jesus_Cano88", "RobSilver", "DolphHauldhagen", "CleGuardPro", "Sonny_108", "jnorris427", "J_D_Cameron", "cnash_baseball", "youngbucsPIT",
     "pitcherlistplv", "baseballpro", "ibwaa", "brandondim", "dannybarrand_", "PrspctVibeCheck", "Mike_Kurland", "DigsPitcher", "tangotiger",
     "AlexMurphyJour", "FXBGNats", "NatsOfTheFuture", "Bnicklaus7", "NickJJ95", "IanCundall", "Jacob_Maxwell14", "RotoGut", "Lethalplatypus1",
-    "jasonrrmartinez", "rotogut", "enosarris", "johnpgh", "BravesStats", "CloserMonkey", "JoeDoyleMiLB", "Prospect_Tilt", "AramLeighton8",
+    "rotogut", "enosarris", "johnpgh", "BravesStats", "CloserMonkey", "JoeDoyleMiLB", "Prospect_Tilt", "AramLeighton8",
     "downonthefarm", "ericcrossmlb", "prospectlarceny", "geoffpontesba", "HighLevBaseball", "sportz_nutt51", "Jesus_Cano88", "jmcammisa", "JasonSanteiu",
     "the__arrival", "realjranderson", "mike_kurland", "tjstats", "fantasyaceball", "jacksonab_", "EliBenPorat", "tigersMLreport", "ander_beisbol1",
     "thedynastyguru", "prospectslive", "DynastyHalp", "dynastytradeshq", "RotoSurgeon", "corbin_young21", "TBTimes_Rays", "charlottevarnes", "drewisokay",
