@@ -600,16 +600,15 @@
   "cache_files": {
     "savant_batter_2026": {
       "path": "state/savant_batter_2026.csv",
-      "fetched_utc": "2026-11-27T12:52:02.670015+00:00"
+      "fetched_utc": "2026-11-28T12:31:46.588300+00:00"
     },
     "savant_pitcher_2026": {
       "path": "state/savant_pitcher_2026.csv",
-      "fetched_utc": "2026-11-27T12:52:02.708091+00:00"
+      "fetched_utc": "2026-11-28T12:31:46.748604+00:00"
     }
   },
-  "last_daily_local_date": "2026-11-27",
+  "last_daily_local_date": "2026-11-28",
   "seen_rss": {
-    "b1303bb0bde9e217a1c64ecb4cf53b64d39eda97": "2026-10-24T04:55:23+00:00",
     "38f56691336e5667e7191ebce53658a762a4b0f1": "2026-10-26T02:44:57+00:00",
     "1ce8b6630be8f3669b03e95874a758fa422714cf": "2026-10-26T22:00:03+00:00",
     "f2c8b60e05416c3a065ce2fa52c8e8313f4afe03": "2026-10-26T17:33:02+00:00",
